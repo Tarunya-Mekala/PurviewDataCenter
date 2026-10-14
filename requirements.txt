@@ -1,0 +1,46 @@
+# -------------------------
+# FastAPI
+# -------------------------
+fastapi
+uvicorn[standard]
+python-multipart
+pyjwt
+bcrypt
+
+# -------------------------
+# Configuration
+# -------------------------
+pydantic
+pydantic-settings
+python-dotenv
+
+# -------------------------
+# Database
+# -------------------------
+sqlalchemy
+psycopg[binary]
+alembic
+
+# -------------------------
+# File Processing
+# -------------------------
+pandas
+openpyxl
+xlrd
+PyMuPDF
+python-docx
+Pillow
+
+# -------------------------
+# LangChain
+# -------------------------
+langchain
+langchain-core
+langchain-community
+langchain-ollama
+
+# -------------------------
+# Testing
+# -------------------------
+pytest
+httpx
