@@ -46,7 +46,7 @@ def test_upload_documents(client):
         ("files", ("rack_layout_cabinet_a1.pdf", io.BytesIO(rack_content), "application/pdf")),
     ]
 
-    # Upload files without explicit document_type to test auto-detection
+    # Upload files without explicit document_type to test auto-detection via main documents endpoint
     res = client.post(
         f"/api/v1/projects/{project_id}/documents",
         files=files,

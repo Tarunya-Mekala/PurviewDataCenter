@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,7 +22,7 @@ class Settings(BaseSettings):
     PROCESSED_DIR: str = str(BASE_DIR / "data" / "processed")
     REPORT_DIR: str = str(BASE_DIR / "data" / "reports")
 
-    MAX_UPLOAD_SIZE_MB: int = 500
+    MAX_UPLOAD_SIZE_MB: Optional[int] = None
 
     # Authentication & JWT
     JWT_SECRET_KEY: str = "super-secret-datacenter-jwt-key-2026-change-in-production"

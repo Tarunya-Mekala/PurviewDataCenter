@@ -2,7 +2,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 from fastapi import HTTPException, UploadFile, status
 
@@ -104,14 +104,15 @@ def get_mime_type_for_file(file_path: Path) -> str:
 async def save_upload_file(
     upload_file: UploadFile,
     dest_path: Path,
-    max_size_mb: int = 500,
+    max_size_mb: Optional[int] = None,
 ) -> Tuple[int, str]:
     """
-    Stream upload file to disk while calculating SHA-256 and enforcing max size.
+    Stream upload file to disk while calculating SHA-256.
+    If max_size_mb is provided, enforces max size; otherwise allows unlimited size.
     Returns (file_size_bytes, sha256_checksum).
     """
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    max_bytes = max_size_mb * 1024 * 1024
+    max_bytes = max_size_mb * 1024 * 1024 if max_size_mb else None
     total_bytes = 0
     hasher = hashlib.sha256()
 
@@ -123,7 +124,7 @@ async def save_upload_file(
                 if not chunk:
                     break
                 total_bytes += len(chunk)
-                if total_bytes > max_bytes:
+                if max_bytes and total_bytes > max_bytes:
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail=f"File exceeds maximum allowed size of {max_size_mb} MB",

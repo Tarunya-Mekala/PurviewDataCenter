@@ -56,6 +56,61 @@ app.add_middleware(
 app.include_router(api_router)
 
 
+def patch_property_for_swagger_files(prop):
+    """Ensure file properties use format: binary for Swagger UI native file picker."""
+    if not isinstance(prop, dict):
+        return
+    # Array of files
+    if prop.get("type") == "array" and isinstance(prop.get("items"), dict):
+        items = prop["items"]
+        if items.get("contentMediaType") == "application/octet-stream" or items.get("format") == "binary":
+            items["type"] = "string"
+            items["format"] = "binary"
+            items.pop("contentMediaType", None)
+    # Single file
+    if prop.get("contentMediaType") == "application/octet-stream":
+        prop["type"] = "string"
+        prop["format"] = "binary"
+        prop.pop("contentMediaType", None)
+    if "properties" in prop:
+        for p in prop["properties"].values():
+            patch_property_for_swagger_files(p)
+    for option in prop.get("anyOf", []):
+        patch_property_for_swagger_files(option)
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        openapi_version="3.0.3",
+    )
+    for schema in openapi_schema.get("components", {}).get("schemas", {}).values():
+        if isinstance(schema, dict):
+            for prop in schema.get("properties", {}).values():
+                patch_property_for_swagger_files(prop)
+
+    for path_item in openapi_schema.get("paths", {}).values():
+        for op in path_item.values():
+            if isinstance(op, dict) and "requestBody" in op:
+                content = op["requestBody"].get("content", {})
+                for media in content.values():
+                    if "schema" in media:
+                        patch_property_for_swagger_files(media["schema"])
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
+
 @app.get("/", tags=["Health"])
 def root():
     return {

@@ -37,7 +37,10 @@ router = APIRouter(tags=["Documents"], dependencies=[Depends(get_current_super_a
 )
 async def upload_documents(
     project_id: str,
-    files: List[UploadFile] = File(..., description="One or more files to upload"),
+    files: List[UploadFile] = File(
+        ...,
+        description="Select one or more files to upload (Excel, CSV, PDF, Word, etc.)",
+    ),
     document_type: Optional[DocumentType] = Form(
         None,
         description="Explicit document category. If omitted, will be auto-detected.",
@@ -48,6 +51,36 @@ async def upload_documents(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No files provided for upload.",
+        )
+    return await DocumentService.upload_documents(
+        db=db,
+        project_id=project_id,
+        files=files,
+        document_type=document_type,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/documents/batch",
+    response_model=DocumentUploadResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Batch upload multiple documents to a project",
+    description="Upload multiple documents simultaneously (alias to /documents).",
+    include_in_schema=False,
+)
+async def batch_upload_documents(
+    project_id: str,
+    files: List[UploadFile] = File(..., description="Select one or more files to upload"),
+    document_type: Optional[DocumentType] = Form(
+        None,
+        description="Explicit document category. If omitted, will be auto-detected.",
+    ),
+    db: Session = Depends(get_db),
+):
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No files provided for batch upload.",
         )
     return await DocumentService.upload_documents(
         db=db,
