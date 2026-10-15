@@ -13,6 +13,7 @@ from app.models.project import Project
 from app.schemas.document import DocumentStatus
 from app.schemas.record import (
     BatchReviewRequest,
+    DocumentExtractionStatusResponse,
     ExtractedRecordCreate,
     ExtractedRecordReview,
     ExtractedRecordUpdate,
@@ -249,8 +250,179 @@ class ExtractionService:
         return records
 
     @staticmethod
-    def extract_document(db: Session, document_id: str) -> ExtractionJobResponse:
+    def extract_document_text(file_path: Path) -> str:
+        """Extract plain text representation from CSV, Excel, PDF, or Word files for AI processing."""
+        ext = file_path.suffix.lower()
+        if ext in [".csv", ".tsv"]:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                return f.read(50000)
+        elif ext in [".xlsx", ".xls", ".xlsm"]:
+            text_lines = []
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+                for sheet_name in wb.sheetnames[:5]:
+                    text_lines.append(f"--- Sheet: {sheet_name} ---")
+                    sheet = wb[sheet_name]
+                    for r in list(sheet.iter_rows(values_only=True))[:200]:
+                        row_str = "\t".join([str(c).strip() for c in r if c is not None])
+                        if row_str.strip():
+                            text_lines.append(row_str)
+                wb.close()
+                return "\n".join(text_lines)
+            except Exception:
+                return ""
+        elif ext == ".pdf":
+            try:
+                import importlib
+                fitz = importlib.import_module("fitz")
+                doc = fitz.open(file_path)
+                pages_text = [page.get_text("text") for page in doc]
+                doc.close()
+                return "\n".join(pages_text)
+            except Exception:
+                return ""
+        else:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                return f.read(50000)
+
+    @staticmethod
+    def extract_document_with_ai(
+        db: Session,
+        document_id: str,
+        model: Optional[str] = None,
+    ) -> ExtractionJobResponse:
+        """Run Qwen LLM extraction chain on a document."""
+        from app.ai.chains import extract_records_with_llm
+        from app.core.config import settings
+
+        target_model = model or settings.LLM_MODEL
+        doc = db.execute(select(Document).where(Document.id == document_id)).scalar_one_or_none()
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document '{document_id}' not found.",
+            )
+
+        file_path = Path(doc.file_path)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Source file missing from disk storage.",
+            )
+
+        doc.status = DocumentStatus.EXTRACTING.value
+        db.commit()
+
+        text_content = ExtractionService.extract_document_text(file_path)
+        if not text_content.strip():
+            return ExtractionService.extract_document(db, document_id)
+
+        try:
+            ai_records = extract_records_with_llm(
+                text_content=text_content,
+                document_type=doc.document_type,
+                model=target_model,
+            )
+
+            # Clear previous records for clean reprocessing
+            existing_records = db.execute(
+                select(ExtractedRecord).where(ExtractedRecord.document_id == document_id)
+            ).scalars().all()
+            for r in existing_records:
+                db.delete(r)
+
+            for item in ai_records:
+                rec = ExtractedRecord(
+                    id=generate_id("rec"),
+                    project_id=doc.project_id,
+                    document_id=doc.id,
+                    record_type=item.get("record_type", "bom_item"),
+                    category=item.get("category"),
+                    part_number=item.get("part_number"),
+                    description=item.get("description"),
+                    quantity=item.get("quantity", 1.0),
+                    unit=item.get("unit", "pcs"),
+                    vendor=item.get("vendor"),
+                    location=item.get("location"),
+                    source_device=item.get("source_device"),
+                    source_port=item.get("source_port"),
+                    target_device=item.get("target_device"),
+                    target_port=item.get("target_port"),
+                    cable_type=item.get("cable_type"),
+                    confidence_score=item.get("confidence_score", 0.90),
+                    raw_data=item.get("raw_data"),
+                    source_sheet="AI_Extracted",
+                    review_status=ReviewStatus.PENDING_REVIEW.value,
+                    is_manually_added=False,
+                )
+                db.add(rec)
+
+            doc.status = DocumentStatus.EXTRACTED.value
+            doc.error_message = None
+            db.commit()
+
+            return ExtractionJobResponse(
+                document_id=doc.id,
+                document_name=doc.filename,
+                status="extracted",
+                records_extracted=len(ai_records),
+                model_used=target_model,
+                message=f"Successfully extracted {len(ai_records)} records using {target_model}.",
+            )
+        except ConnectionError:
+            # Fallback to tabular parser if Ollama is not connected
+            fb = ExtractionService.extract_document(db, document_id)
+            fb.message = f"{fb.message} (Note: Ollama offline at {settings.OLLAMA_BASE_URL}, used heuristic table extraction)"
+            return fb
+        except Exception as e:
+            doc.status = DocumentStatus.FAILED.value
+            doc.error_message = f"AI extraction error: {str(e)}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"AI extraction failed: {str(e)}",
+            )
+
+    @staticmethod
+    def extract_raw_snippet_with_ai(
+        text: str,
+        document_type: str = "bom",
+        model: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Run AI extraction directly on an arbitrary text or table snippet."""
+        from app.ai.chains import extract_records_with_llm
+        from app.core.config import settings
+
+        target_model = model or settings.LLM_MODEL
+        try:
+            return extract_records_with_llm(
+                text_content=text,
+                document_type=document_type,
+                model=target_model,
+            )
+        except ConnectionError as ce:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(ce),
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"AI extraction error: {str(e)}",
+            )
+
+    @staticmethod
+    def extract_document(
+        db: Session,
+        document_id: str,
+        use_ai: bool = False,
+        model: Optional[str] = None,
+    ) -> ExtractionJobResponse:
         """Execute extraction pipeline for a specific document and store extracted records."""
+        if use_ai:
+            return ExtractionService.extract_document_with_ai(db, document_id, model=model)
+
         doc = db.execute(select(Document).where(Document.id == document_id)).scalar_one_or_none()
         if not doc:
             raise HTTPException(
@@ -348,6 +520,36 @@ class ExtractionService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Extraction failed: {str(e)}",
             )
+
+    @staticmethod
+    def get_document_extraction_status(db: Session, document_id: str) -> DocumentExtractionStatusResponse:
+        """Get extraction progress and review breakdown for a document."""
+        doc = db.execute(select(Document).where(Document.id == document_id)).scalar_one_or_none()
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document '{document_id}' not found.",
+            )
+        records = db.execute(
+            select(ExtractedRecord).where(ExtractedRecord.document_id == document_id)
+        ).scalars().all()
+
+        counts = {
+            "pending_review": sum(1 for r in records if r.review_status == ReviewStatus.PENDING_REVIEW.value),
+            "approved": sum(1 for r in records if r.review_status == ReviewStatus.APPROVED.value),
+            "modified": sum(1 for r in records if r.review_status == ReviewStatus.MODIFIED.value),
+            "rejected": sum(1 for r in records if r.review_status == ReviewStatus.REJECTED.value),
+        }
+
+        return DocumentExtractionStatusResponse(
+            document_id=doc.id,
+            filename=doc.filename,
+            document_type=doc.document_type,
+            status=doc.status,
+            total_records_extracted=len(records),
+            review_status_counts=counts,
+            error_message=doc.error_message,
+        )
 
     @staticmethod
     def extract_all_project_documents(db: Session, project_id: str) -> List[ExtractionJobResponse]:

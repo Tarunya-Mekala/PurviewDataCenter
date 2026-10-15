@@ -14,13 +14,16 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.schemas.record import (
+    AIExtractionRequest,
     BatchReviewAction,
     BatchReviewRequest,
+    DocumentExtractionStatusResponse,
     ExtractedRecordCreate,
     ExtractedRecordResponse,
     ExtractedRecordReview,
     ExtractedRecordUpdate,
     ExtractionJobResponse,
+    RawTextExtractionRequest,
     RecordListResponse,
     RecordType,
     ReviewStatus,

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     )
 
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    LLM_MODEL: str = "qwen3:8b"
+    LLM_MODEL: str = "qwen2.5:27b"
 
     UPLOAD_DIR: str = str(BASE_DIR / "data" / "uploads")
     EXTRACTED_DIR: str = str(BASE_DIR / "data" / "extracted")

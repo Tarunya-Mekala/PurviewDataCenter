@@ -124,3 +124,28 @@ class ExtractionJobResponse(BaseModel):
     status: str
     records_extracted: int
     message: str
+    model_used: Optional[str] = None
+
+
+class AIExtractionRequest(BaseModel):
+    model: Optional[str] = Field(
+        None,
+        description="Override Ollama model (e.g. 'qwen2.5:27b', 'qwen3.5:27b'). Defaults to system LLM_MODEL.",
+    )
+
+
+class RawTextExtractionRequest(BaseModel):
+    text: str = Field(..., description="Raw text, unstructured BOM, or table text to extract with AI")
+    document_type: Optional[str] = Field("bom", description="Document type: 'bom', 'p2p', 'rack_layout', 'other'")
+    model: Optional[str] = Field(None, description="Ollama model to use (e.g. 'qwen2.5:27b')")
+
+
+class DocumentExtractionStatusResponse(BaseModel):
+    document_id: str
+    filename: str
+    document_type: str
+    status: str
+    total_records_extracted: int
+    review_status_counts: Dict[str, int]
+    error_message: Optional[str] = None
+
