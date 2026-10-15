@@ -9,6 +9,7 @@ from app.utils.id_generator import generate_id
 
 if TYPE_CHECKING:
     from app.models.document import Document
+    from app.models.extracted_record import ExtractedRecord
 
 
 def get_utc_now():
@@ -46,6 +47,12 @@ class Project(Base):
 
     documents: Mapped[List["Document"]] = relationship(
         "Document",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    extracted_records: Mapped[List["ExtractedRecord"]] = relationship(
+        "ExtractedRecord",
         back_populates="project",
         cascade="all, delete-orphan",
         lazy="selectin",

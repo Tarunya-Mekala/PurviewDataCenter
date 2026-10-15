@@ -13,6 +13,19 @@ from app.schemas.project import (
     ProjectResponse,
     ProjectUpdate,
 )
+from app.schemas.record import (
+    BatchReviewAction,
+    BatchReviewRequest,
+    ExtractedRecordCreate,
+    ExtractedRecordResponse,
+    ExtractedRecordReview,
+    ExtractedRecordUpdate,
+    ExtractionJobResponse,
+    RecordListResponse,
+    RecordType,
+    ReviewStatus,
+    ReviewSummaryResponse,
+)
 
 __all__ = [
     "DocumentType",
@@ -26,4 +39,15 @@ __all__ = [
     "ProjectUpdate",
     "ProjectResponse",
     "ProjectListResponse",
+    "ReviewStatus",
+    "RecordType",
+    "ExtractedRecordCreate",
+    "ExtractedRecordUpdate",
+    "ExtractedRecordReview",
+    "BatchReviewAction",
+    "BatchReviewRequest",
+    "ExtractedRecordResponse",
+    "RecordListResponse",
+    "ReviewSummaryResponse",
+    "ExtractionJobResponse",
 ]

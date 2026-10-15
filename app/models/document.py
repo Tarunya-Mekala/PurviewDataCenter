@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -8,6 +8,7 @@ from app.core.database import Base
 from app.utils.id_generator import generate_id
 
 if TYPE_CHECKING:
+    from app.models.extracted_record import ExtractedRecord
     from app.models.project import Project
 
 
@@ -89,4 +90,10 @@ class Document(Base):
     project: Mapped["Project"] = relationship(
         "Project",
         back_populates="documents",
+    )
+    extracted_records: Mapped[List["ExtractedRecord"]] = relationship(
+        "ExtractedRecord",
+        back_populates="document",
+        cascade="all, delete-orphan",
+        lazy="selectin",
     )
