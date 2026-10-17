@@ -25,9 +25,16 @@ from app.schemas.record import (
     ExtractionJobResponse,
     RawTextExtractionRequest,
     RecordListResponse,
+    RecordReviewActionResponse,
     RecordType,
     ReviewStatus,
     ReviewSummaryResponse,
+)
+from app.schemas.vendor import (
+    VendorCreate,
+    VendorListResponse,
+    VendorResponse,
+    VendorUpdate,
 )
 
 __all__ = [
@@ -50,7 +57,12 @@ __all__ = [
     "BatchReviewAction",
     "BatchReviewRequest",
     "ExtractedRecordResponse",
+    "RecordReviewActionResponse",
     "RecordListResponse",
     "ReviewSummaryResponse",
     "ExtractionJobResponse",
+    "VendorCreate",
+    "VendorUpdate",
+    "VendorResponse",
+    "VendorListResponse",
 ]

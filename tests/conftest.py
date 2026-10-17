@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import settings
 from app.core.database import Base, get_db
 from app.core.security import create_access_token, init_super_admin
+import app.models  # noqa: F401
 from app.main import app
 
 
@@ -30,7 +31,13 @@ def test_engine():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
+    import app.core.database
+    orig_session_local = app.core.database.SessionLocal
+    app.core.database.SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=engine
+    )
     yield engine
+    app.core.database.SessionLocal = orig_session_local
     engine.dispose()
 
 

@@ -1,4 +1,4 @@
-import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.document import Document
+from app.models.extracted_record import ExtractedRecord
 from app.models.project import Project
+from app.models.record_review_action import RecordReviewAction
 from app.schemas.document import (
     DocumentResponse,
     DocumentStatus,
@@ -17,7 +19,14 @@ from app.schemas.document import (
     DocumentUploadFailure,
     DocumentUploadResult,
 )
-from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
+from app.schemas.project import (
+    ProjectCreate,
+    ProjectDocumentCounts,
+    ProjectRecordCounts,
+    ProjectResponse,
+    ProjectUpdate,
+)
+from app.schemas.record import ReviewStatus
 from app.utils.file_utils import (
     delete_file_safely,
     detect_document_type,
@@ -30,10 +39,43 @@ from app.utils.file_utils import (
 from app.utils.id_generator import generate_id
 
 
+def record_to_values_dict(record: ExtractedRecord) -> dict:
+    """Snapshot a record's current field values for audit history."""
+    return {
+        "record_type": record.record_type,
+        "category": record.category,
+        "part_number": record.part_number,
+        "cleaned_part_number": record.cleaned_part_number,
+        "model": record.model,
+        "serial_number": record.serial_number,
+        "condition": record.condition,
+        "condition_notes": record.condition_notes,
+        "description": record.description,
+        "quantity": record.quantity,
+        "unit": record.unit,
+        "vendor": record.vendor,
+        "manufacturer": record.manufacturer,
+        "location": record.location,
+        "rack": record.rack,
+        "u_position": record.u_position,
+        "power_kw": record.power_kw,
+        "cable_length_m": record.cable_length_m,
+        "source_device": record.source_device,
+        "source_port": record.source_port,
+        "target_device": record.target_device,
+        "target_port": record.target_port,
+        "cable_type": record.cable_type,
+        "review_status": record.review_status,
+        "review_notes": record.review_notes,
+        "review_reason": record.review_reason,
+        "unmapped_columns": record.unmapped_columns or [],
+        "confidence_score": record.confidence_score,
+    }
+
+
 class DocumentService:
     @staticmethod
-    def create_project(db: Session, project_in: ProjectCreate) -> Project:
-        # Check if project name already exists
+    def create_project(db: Session, project_in: ProjectCreate, creator_email: Optional[str] = None) -> Project:
         existing = db.execute(
             select(Project).where(Project.name == project_in.name)
         ).scalar_one_or_none()
@@ -47,6 +89,8 @@ class DocumentService:
             id=generate_id("proj"),
             name=project_in.name,
             description=project_in.description,
+            status="active",
+            created_by=creator_email,
         )
         db.add(project)
         db.commit()
@@ -63,6 +107,20 @@ class DocumentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project '{project_id}' not found.",
             )
+        return project
+
+    @staticmethod
+    def update_project(db: Session, project_id: str, project_in: ProjectUpdate) -> Project:
+        project = DocumentService.get_project(db, project_id)
+        if project_in.name is not None:
+            project.name = project_in.name
+        if project_in.description is not None:
+            project.description = project_in.description
+        if project_in.status is not None:
+            project.status = project_in.status.lower().strip()
+        project.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(project)
         return project
 
     @staticmethod
@@ -83,26 +141,80 @@ class DocumentService:
 
         results = []
         for p in projects:
-            doc_count = db.execute(
-                select(func.count(Document.id)).where(Document.project_id == p.id)
+            # Query document status counts
+            doc_rows = db.execute(
+                select(Document.status, func.count(Document.id))
+                .where(Document.project_id == p.id)
+                .group_by(Document.status)
+            ).all()
+            doc_counts_dict = {row[0]: row[1] for row in doc_rows}
+            doc_counts = ProjectDocumentCounts(
+                pending=doc_counts_dict.get("pending", 0),
+                parsing=doc_counts_dict.get("parsing", 0),
+                parsed=doc_counts_dict.get("parsed", 0),
+                extracting=doc_counts_dict.get("extracting", 0),
+                extracted=doc_counts_dict.get("extracted", 0),
+                failed=doc_counts_dict.get("failed", 0),
+            )
+
+            # Query record counts
+            total_recs = db.execute(
+                select(func.count(ExtractedRecord.id))
+                .where(ExtractedRecord.project_id == p.id, ExtractedRecord.is_deleted == False)
             ).scalar() or 0
+            pending_recs = db.execute(
+                select(func.count(ExtractedRecord.id))
+                .where(
+                    ExtractedRecord.project_id == p.id,
+                    ExtractedRecord.is_deleted == False,
+                    ExtractedRecord.review_status == ReviewStatus.PENDING_REVIEW.value,
+                )
+            ).scalar() or 0
+            record_counts = ProjectRecordCounts(total=total_recs, pending_review=pending_recs)
+
+            doc_count = sum(doc_counts_dict.values())
             results.append(
                 ProjectResponse(
                     id=p.id,
                     name=p.name,
                     description=p.description,
+                    status=p.status or "active",
+                    owner_id=p.owner_id,
+                    created_by=p.created_by,
                     created_at=p.created_at,
                     updated_at=p.updated_at,
                     document_count=doc_count,
+                    document_counts=doc_counts,
+                    record_counts=record_counts,
                 )
             )
         return total, results
 
     @staticmethod
-    def delete_project(db: Session, project_id: str) -> bool:
+    def delete_project(db: Session, project_id: str, reviewer_email: Optional[str] = None) -> bool:
         project = DocumentService.get_project(db, project_id)
-        # Delete associated files on disk
-        for doc in project.documents:
+        # Problem 19: Soft delete all project records and create audit action entries
+        docs = db.execute(select(Document).where(Document.project_id == project_id)).scalars().all()
+        for doc in docs:
+            records = db.execute(
+                select(ExtractedRecord).where(
+                    ExtractedRecord.document_id == doc.id,
+                    ExtractedRecord.is_deleted == False,
+                )
+            ).scalars().all()
+            for r in records:
+                old_val = record_to_values_dict(r)
+                r.is_deleted = True
+                audit = RecordReviewAction(
+                    id=generate_id("act_"),
+                    record_id=r.id,
+                    action="project_deleted",
+                    old_values=old_val,
+                    new_values=None,
+                    reason=f"Project '{project.name}' deleted",
+                    reviewer_id=reviewer_email or "system",
+                )
+                db.add(audit)
             delete_file_safely(Path(doc.file_path))
 
         db.delete(project)
@@ -115,9 +227,31 @@ class DocumentService:
         project_id: str,
         files: List[UploadFile],
         document_type: Optional[DocumentType] = None,
+        source: str = "plan",
+        vendor_id: Optional[str] = None,
+        uploader_email: Optional[str] = None,
     ) -> DocumentUploadResult:
         # Validate project exists
         DocumentService.get_project(db, project_id)
+
+        # Validate source and vendor_id
+        source_clean = (source or "plan").lower().strip()
+        if source_clean not in ["plan", "vendor"]:
+            source_clean = "plan"
+
+        if source_clean == "vendor":
+            if not vendor_id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="vendor_id is required when source is 'vendor'",
+                )
+            from app.models.vendor import Vendor
+            vendor = db.get(Vendor, vendor_id)
+            if not vendor or vendor.project_id != project_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Vendor '{vendor_id}' not found in project '{project_id}'",
+                )
 
         successful: List[DocumentResponse] = []
         failed: List[DocumentUploadFailure] = []
@@ -128,6 +262,13 @@ class DocumentService:
         for file in files:
             orig_filename = file.filename or "unnamed_document"
             try:
+                # Problem 24: Max upload limit check (50 MB)
+                if file.size and file.size > 50 * 1024 * 1024:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"File '{orig_filename}' exceeds maximum allowed limit of 50 MB.",
+                    )
+
                 # 1. Validate extension
                 ext = validate_file_extension(orig_filename)
                 clean_name = sanitize_filename(orig_filename)
@@ -148,7 +289,7 @@ class DocumentService:
                 file_size, sha256 = await save_upload_file(
                     upload_file=file,
                     dest_path=dest_path,
-                    max_size_mb=settings.MAX_UPLOAD_SIZE_MB,
+                    max_size_mb=50,
                 )
 
                 # 5. Create database record
@@ -161,6 +302,10 @@ class DocumentService:
                     file_type=ext.lstrip("."),
                     file_size=file_size,
                     document_type=resolved_type,
+                    source=source_clean,
+                    vendor_id=vendor_id if source_clean == "vendor" else None,
+                    version=1,
+                    uploaded_by=uploader_email,
                     status=DocumentStatus.PENDING.value,
                     checksum_sha256=sha256,
                     metadata_json={
@@ -190,6 +335,80 @@ class DocumentService:
                 )
 
         return DocumentUploadResult(successful=successful, failed=failed)
+
+    @staticmethod
+    def process_document_after_upload(document_id: str) -> None:
+        """Problem 17: Background worker parses document from pending -> parsing -> parsed."""
+        from app.core.database import SessionLocal
+        with SessionLocal() as db:
+            doc = db.get(Document, document_id)
+            if not doc or doc.status not in [DocumentStatus.PENDING.value, DocumentStatus.PARSING.value]:
+                return
+            doc.status = DocumentStatus.PARSING.value
+            db.commit()
+            try:
+                file_path = Path(doc.file_path)
+                if not file_path.exists():
+                    doc.status = DocumentStatus.FAILED.value
+                    doc.error_message = f"File missing from disk storage: {doc.file_path}"
+                    db.commit()
+                    return
+
+                doc.status = DocumentStatus.PARSED.value
+                doc.error_message = None
+                db.commit()
+            except Exception as e:
+                doc.status = DocumentStatus.FAILED.value
+                doc.error_message = f"Parsing error: {str(e)}"
+                db.commit()
+
+    @staticmethod
+    async def replace_document(
+        db: Session,
+        document_id: str,
+        file: UploadFile,
+        uploader_email: Optional[str] = None,
+    ) -> Document:
+        """Problem 26: Replace document file in place, increment version, reset to pending."""
+        doc = DocumentService.get_document(db, document_id)
+        orig_filename = file.filename or doc.filename
+        ext = validate_file_extension(orig_filename)
+        clean_name = sanitize_filename(orig_filename)
+
+        if file.size and file.size > 50 * 1024 * 1024:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File '{orig_filename}' exceeds maximum allowed limit of 50 MB.",
+            )
+
+        project_upload_dir = Path(settings.UPLOAD_DIR) / doc.project_id
+        project_upload_dir.mkdir(parents=True, exist_ok=True)
+
+        new_version = (doc.version or 1) + 1
+        stored_filename = f"{doc.id}_v{new_version}_{clean_name}"
+        dest_path = project_upload_dir / stored_filename
+
+        file_size, sha256 = await save_upload_file(
+            upload_file=file,
+            dest_path=dest_path,
+            max_size_mb=50,
+        )
+
+        doc.filename = orig_filename
+        doc.stored_filename = stored_filename
+        doc.file_path = str(dest_path)
+        doc.file_type = ext.lstrip(".")
+        doc.file_size = file_size
+        doc.checksum_sha256 = sha256
+        doc.version = new_version
+        doc.status = DocumentStatus.PENDING.value
+        doc.error_message = None
+        if uploader_email:
+            doc.uploaded_by = uploader_email
+
+        db.commit()
+        db.refresh(doc)
+        return doc
 
     @staticmethod
     def get_document(db: Session, document_id: str) -> Document:
@@ -260,11 +479,31 @@ class DocumentService:
         return doc
 
     @staticmethod
-    def delete_document(db: Session, document_id: str) -> bool:
+    def delete_document(db: Session, document_id: str, reviewer_email: Optional[str] = None) -> bool:
+        """Problem 19: Deleting a document removes (soft delete) its records and writes history."""
         doc = DocumentService.get_document(db, document_id)
-        # Delete file from filesystem
-        delete_file_safely(Path(doc.file_path))
+        records = db.execute(
+            select(ExtractedRecord).where(
+                ExtractedRecord.document_id == document_id,
+                ExtractedRecord.is_deleted == False,
+            )
+        ).scalars().all()
 
+        for r in records:
+            old_val = record_to_values_dict(r)
+            r.is_deleted = True
+            audit = RecordReviewAction(
+                id=generate_id("act_"),
+                record_id=r.id,
+                action="document_deleted",
+                old_values=old_val,
+                new_values=None,
+                reason=f"Document '{doc.filename}' deleted",
+                reviewer_id=reviewer_email or "system",
+            )
+            db.add(audit)
+
+        delete_file_safely(Path(doc.file_path))
         db.delete(doc)
         db.commit()
         return True
