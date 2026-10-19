@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -10,6 +10,7 @@ from app.utils.id_generator import generate_id
 if TYPE_CHECKING:
     from app.models.extracted_record import ExtractedRecord
     from app.models.project import Project
+    from app.models.vendor import Vendor
 
 
 def get_utc_now():
@@ -87,8 +88,34 @@ class Document(Base):
         onupdate=get_utc_now,
     )
 
+    source: Mapped[str] = mapped_column(
+        String(50),
+        default="plan",
+        nullable=False,
+        index=True,
+    )  # "plan" or "vendor"
+    vendor_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("vendors.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+    )
+    uploaded_by: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
     project: Mapped["Project"] = relationship(
         "Project",
+        back_populates="documents",
+    )
+    vendor_rel: Mapped[Optional["Vendor"]] = relationship(
+        "Vendor",
         back_populates="documents",
     )
     extracted_records: Mapped[List["ExtractedRecord"]] = relationship(

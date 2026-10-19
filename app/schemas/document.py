@@ -6,7 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class DocumentType(str, Enum):
     BOM = "bom"
-    P2P = "p2p"
+    PURCHASE = "purchase"
+    P2P = "p2p"  # Alias for purchase / legacy support
     RACK_LAYOUT = "rack_layout"
     POWER = "power"
     CABLE = "cable"
@@ -25,10 +26,14 @@ class DocumentStatus(str, Enum):
 class DocumentBase(BaseModel):
     filename: str
     document_type: DocumentType = DocumentType.OTHER
+    source: str = Field(default="plan", description="'plan' or 'vendor'")
+    vendor_id: Optional[str] = Field(default=None, description="Vendor ID if source is vendor")
 
 
 class DocumentUpdate(BaseModel):
     document_type: Optional[DocumentType] = None
+    source: Optional[str] = None
+    vendor_id: Optional[str] = None
     status: Optional[DocumentStatus] = None
     metadata_json: Optional[Dict[str, Any]] = None
 
@@ -43,12 +48,17 @@ class DocumentResponse(BaseModel):
     file_type: str
     file_size: int
     document_type: DocumentType
+    source: str = "plan"
+    vendor_id: Optional[str] = None
+    version: int = 1
+    uploaded_by: Optional[str] = None
     status: DocumentStatus
     checksum_sha256: Optional[str] = None
     metadata_json: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
 
 
 class DocumentListResponse(BaseModel):

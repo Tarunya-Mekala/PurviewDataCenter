@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
@@ -20,6 +20,7 @@ from app.utils.id_generator import generate_id
 if TYPE_CHECKING:
     from app.models.document import Document
     from app.models.project import Project
+    from app.models.record_review_action import RecordReviewAction
 
 
 def get_utc_now():
@@ -97,6 +98,30 @@ class ExtractedRecord(Base):
         index=True,
     )
 
+    cleaned_part_number: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+    model: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+    serial_number: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+    condition: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        index=True,
+    )  # "ok" | "failed" | null
+    condition_notes: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
     description: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
@@ -119,15 +144,16 @@ class ExtractedRecord(Base):
         index=True,
     )
 
+    # Problem 5: Never default to 1 or pcs when not present in file!
     quantity: Mapped[Optional[float]] = mapped_column(
         Float,
-        default=1.0,
+        default=None,
         nullable=True,
     )
 
     unit: Mapped[Optional[str]] = mapped_column(
         String(50),
-        default="pcs",
+        default=None,
         nullable=True,
     )
 
@@ -147,10 +173,39 @@ class ExtractedRecord(Base):
     )
 
     # Existing generic location field
+    manufacturer: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+    vendor: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )  # kept for frontend backward compatibility
+
+    # Physical Location & Rack fields
     location: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
         index=True,
+    )
+    rack: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True,
+    )
+    u_position: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+    power_kw: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    cable_length_m: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
     )
 
     # =========================================================
@@ -205,13 +260,39 @@ class ExtractedRecord(Base):
     # AI Extraction Metadata
     # =========================================================
 
+    # Extraction Metadata & Method
     confidence_score: Mapped[float] = mapped_column(
         Float,
         default=1.0,
         nullable=False,
     )
 
+    extraction_method: Mapped[str] = mapped_column(
+        String(50),
+        default="table",
+        nullable=False,
+    )  # "table" | "ai"
+    model_used: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+    )
     raw_data: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+    unmapped_columns: Mapped[Optional[List[str]]] = mapped_column(
+        JSON,
+        default=list,
+        nullable=True,
+    )
+    review_reason: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True,
+    )  # "missing_value" | "unmapped_field" | "unclear_match" | etc.
+
+    # Problem 8: Original frozen snapshot at creation
+    original_values: Mapped[Optional[Dict[str, Any]]] = mapped_column(
         JSON,
         nullable=True,
     )
@@ -225,6 +306,11 @@ class ExtractedRecord(Base):
         Integer,
         nullable=True,
     )
+    field_sources: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
 
     # =========================================================
     # Human Review & Verification
@@ -237,6 +323,7 @@ class ExtractedRecord(Base):
         index=True,
     )
 
+    )  # "pending_review", "approved", "modified", "rejected"
     reviewed_by: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
@@ -259,6 +346,14 @@ class ExtractedRecord(Base):
     )
 
     # =========================================================
+    # Problem 9: Soft delete
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+    )
+
     # Timestamps
     # =========================================================
 
@@ -287,4 +382,12 @@ class ExtractedRecord(Base):
     project: Mapped["Project"] = relationship(
         "Project",
         back_populates="extracted_records",
+    )
+    )
+    history: Mapped[List["RecordReviewAction"]] = relationship(
+        "RecordReviewAction",
+        back_populates="record",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="RecordReviewAction.created_at.asc()",
     )

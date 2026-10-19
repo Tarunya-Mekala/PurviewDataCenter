@@ -9,6 +9,7 @@ from app.schemas.project import (
     ProjectCreate,
     ProjectListResponse,
     ProjectResponse,
+    ProjectUpdate,
 )
 from app.services.document_service import DocumentService
 
@@ -35,6 +36,9 @@ def create_project(
         id=project.id,
         name=project.name,
         description=project.description,
+        status=project.status,
+        owner_id=project.owner_id,
+        created_by=project.created_by,
         created_at=project.created_at,
         updated_at=project.updated_at,
         document_count=0,
@@ -71,9 +75,37 @@ def get_project(
         id=project.id,
         name=project.name,
         description=project.description,
+        status=project.status,
+        owner_id=project.owner_id,
+        created_by=project.created_by,
         created_at=project.created_at,
         updated_at=project.updated_at,
         document_count=len(project.documents),
+    )
+
+
+@router.patch(
+    "/{project_id}",
+    response_model=ProjectResponse,
+    summary="Update project name or status",
+    description="Rename a project or transition status to 'active', 'complete', or 'archived'.",
+)
+def update_project(
+    project_id: str,
+    project_in: ProjectUpdate,
+    db: Session = Depends(get_db),
+):
+    project = DocumentService.update_project(db, project_id, project_in)
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        status=project.status,
+        owner_id=project.owner_id,
+        created_by=project.created_by,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+        document_count=len(project.documents) if project.documents else 0,
     )
 
 

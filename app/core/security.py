@@ -103,6 +103,23 @@ def get_current_user(
     return user
 
 
+get_current_active_user = get_current_user
+
+
+def require_roles(allowed_roles: list[str]):
+    """FastAPI dependency to enforce fine-grained role-based access control."""
+    def role_checker(current_user: User = Depends(get_current_user)) -> User:
+        if current_user.is_super_admin or current_user.role in ["super_admin", "admin"]:
+            return current_user
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: role '{current_user.role}' lacks permission for this action.",
+            )
+        return current_user
+    return role_checker
+
+
 def get_current_super_admin(
     current_user: User = Depends(get_current_user),
 ) -> User:
@@ -113,6 +130,43 @@ def get_current_super_admin(
             detail="Access forbidden: Super Admin privileges required.",
         )
     return current_user
+
+
+def create_evidence_token(document_id: str, expires_minutes: int = 15) -> str:
+    """Generate a short-lived signed token for secure document evidence image access."""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    payload = {"doc_id": document_id, "exp": expire, "type": "evidence"}
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def verify_evidence_token(token: str) -> str:
+    """Validate evidence token and return document_id."""
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        doc_id = payload.get("doc_id")
+        if not doc_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid evidence token payload")
+        return doc_id
+    except (jwt.ExpiredSignatureError, jwt.PyJWTError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Expired or invalid evidence token")
+
+
+# In-memory login rate limiter: {ip/email: [timestamp, ...]}
+_login_attempts: dict = {}
+
+
+def check_login_rate_limit(key: str, max_attempts: int = 10, window_seconds: int = 60) -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    attempts = _login_attempts.get(key, [])
+    # Filter attempts within window
+    attempts = [t for t in attempts if now - t < window_seconds]
+    if len(attempts) >= max_attempts:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please wait a minute before trying again.",
+        )
+    attempts.append(now)
+    _login_attempts[key] = attempts
 
 
 def init_super_admin(db: Session) -> User:
@@ -135,3 +189,4 @@ def init_super_admin(db: Session) -> User:
         db.refresh(admin)
 
     return admin
+
