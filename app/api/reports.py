@@ -32,6 +32,8 @@ EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         }
     },
 )
+@router.get("/documents/{document_id}/excel", include_in_schema=True)
+@router.get("/documents/{document_id}/export/excel", include_in_schema=True)
 def export_document_excel(
     document_id: str,
     view: Optional[str] = Query(None, description="Set to 'html' to view interactive spreadsheet in browser"),
@@ -62,6 +64,7 @@ def export_document_excel(
     summary="Show extracted document as interactive Excel spreadsheet in browser",
     description="Renders a rich, responsive Excel spreadsheet interface directly in the browser with live search, filters, and download capabilities.",
 )
+@router.get("/documents/{document_id}/excel/view", response_class=HTMLResponse, include_in_schema=True)
 def view_document_excel_html(
     document_id: str,
     token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser links"),
@@ -77,6 +80,7 @@ def view_document_excel_html(
     summary="Get extracted document as Excel spreadsheet grid JSON",
     description="Returns structured columns, rows, and summary metrics for client spreadsheet or data grid rendering.",
 )
+@router.get("/documents/{document_id}/excel/preview", include_in_schema=True)
 def preview_document_excel_json(
     document_id: str,
     db: Session = Depends(get_db),
@@ -103,6 +107,8 @@ def preview_document_excel_json(
         }
     },
 )
+@router.get("/projects/{project_id}/excel", include_in_schema=True)
+@router.get("/projects/{project_id}/export/excel", include_in_schema=True)
 def export_project_excel(
     project_id: str,
     view: Optional[str] = Query(None, description="Set to 'html' to view interactive spreadsheet in browser"),
@@ -132,6 +138,7 @@ def export_project_excel(
     summary="Show project extracted records as interactive Excel spreadsheet in browser",
     description="Renders a responsive Excel spreadsheet interface for all extracted records across a project.",
 )
+@router.get("/projects/{project_id}/excel/view", response_class=HTMLResponse, include_in_schema=True)
 def view_project_excel_html(
     project_id: str,
     token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser links"),
@@ -147,6 +154,7 @@ def view_project_excel_html(
     summary="Get project extracted records as Excel spreadsheet grid JSON",
     description="Returns structured columns and rows for all project records formatted as a spreadsheet table.",
 )
+@router.get("/projects/{project_id}/excel/preview", include_in_schema=True)
 def preview_project_excel_json(
     project_id: str,
     db: Session = Depends(get_db),
