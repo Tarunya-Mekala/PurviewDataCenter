@@ -257,29 +257,30 @@ class ExtractionService:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 return f.read(50000)
         elif ext in [".xlsx", ".xls", ".xlsm"]:
-            text_lines = []
             try:
-                import openpyxl
-                wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
-                for sheet_name in wb.sheetnames[:5]:
-                    text_lines.append(f"--- Sheet: {sheet_name} ---")
-                    sheet = wb[sheet_name]
-                    for r in list(sheet.iter_rows(values_only=True))[:200]:
-                        row_str = "\t".join([str(c).strip() for c in r if c is not None])
-                        if row_str.strip():
-                            text_lines.append(row_str)
-                wb.close()
-                return "\n".join(text_lines)
+                from app.parsers.excel_parser import parse_excel_file, excel_to_llm_text
+                parsed = parse_excel_file(file_path)
+                return excel_to_llm_text(parsed)
             except Exception:
-                return ""
+                text_lines = []
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+                    for sheet_name in wb.sheetnames[:5]:
+                        text_lines.append(f"--- Sheet: {sheet_name} ---")
+                        sheet = wb[sheet_name]
+                        for r in list(sheet.iter_rows(values_only=True))[:200]:
+                            row_str = "\t".join([str(c).strip() for c in r if c is not None])
+                            if row_str.strip():
+                                text_lines.append(row_str)
+                    wb.close()
+                    return "\n".join(text_lines)
+                except Exception:
+                    return ""
         elif ext == ".pdf":
             try:
-                import importlib
-                fitz = importlib.import_module("fitz")
-                doc = fitz.open(file_path)
-                pages_text = [page.get_text("text") for page in doc]
-                doc.close()
-                return "\n".join(pages_text)
+                from app.parsers.pdf_parser import extract_text_from_pdf
+                return extract_text_from_pdf(file_path)
             except Exception:
                 return ""
         else:
@@ -319,11 +320,13 @@ class ExtractionService:
             return ExtractionService.extract_document(db, document_id)
 
         try:
-            ai_records = extract_records_with_llm(
+            ai_result = extract_records_with_llm(
                 text_content=text_content,
                 document_type=doc.document_type,
                 model=target_model,
+                source_file_name=doc.filename,
             )
+            ai_records = [r.model_dump() for r in ai_result.records] if hasattr(ai_result, "records") else ai_result
 
             # Clear previous records for clean reprocessing
             existing_records = db.execute(
@@ -396,11 +399,14 @@ class ExtractionService:
 
         target_model = model or settings.LLM_MODEL
         try:
-            return extract_records_with_llm(
+            res = extract_records_with_llm(
                 text_content=text,
                 document_type=document_type,
                 model=target_model,
             )
+            if hasattr(res, "records"):
+                return [r.model_dump() for r in res.records]
+            return res
         except ConnectionError as ce:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

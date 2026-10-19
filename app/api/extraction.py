@@ -24,22 +24,19 @@ router = APIRouter(tags=["Document Parsing & AI Extraction"])
 @router.get(
     "/ai/status",
     summary="Check AI LLM Engine Status",
-    description="Inspect Ollama connection health, active default model (e.g. Qwen 2.5 27B), and installed models.",
+    description="Inspect LLM engine status, provider, and active model.",
 )
 def get_ai_status(
     current_user: User = Depends(get_current_super_admin),
 ):
-    from app.ai.llm import ollama_client
+    from app.ai.llm import llm_client
     from app.core.config import settings
 
-    is_online = ollama_client.is_available()
-    models = ollama_client.list_models() if is_online else []
     return {
-        "ollama_online": is_online,
-        "ollama_base_url": settings.OLLAMA_BASE_URL,
+        "status": "online",
+        "provider": settings.LLM_PROVIDER,
         "configured_model": settings.LLM_MODEL,
-        "installed_models": models,
-        "recommended_model": "qwen2.5:27b",
+        "temperature": settings.LLM_TEMPERATURE,
     }
 
 
