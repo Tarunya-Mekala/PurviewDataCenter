@@ -30,7 +30,6 @@ xlrd
 PyMuPDF
 python-docx
 Pillow
-pytesseract
 
 # -------------------------
 # LangChain
@@ -38,12 +37,7 @@ pytesseract
 langchain
 langchain-core
 langchain-community
-
-# -------------------------
-# LLM
-# -------------------------
-openai
-httpx
+langchain-ollama
 
 # -------------------------
 # Testing
