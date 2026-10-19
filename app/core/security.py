@@ -3,7 +3,7 @@ from typing import Optional
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from app.core.database import get_db
 from app.models.user import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -107,6 +108,57 @@ def get_current_super_admin(
     current_user: User = Depends(get_current_user),
 ) -> User:
     """FastAPI dependency ensuring the caller has super admin privileges."""
+    if not current_user.is_super_admin and current_user.role != "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Super Admin privileges required.",
+        )
+    return current_user
+
+
+def get_current_user_flexible(
+    token_param: Optional[str] = Query(None, alias="token"),
+    bearer_token: Optional[str] = Depends(oauth2_scheme_optional),
+    db: Session = Depends(get_db),
+) -> User:
+    """Accept token from Bearer Authorization header or ?token= query parameter."""
+    raw_token = bearer_token or token_param
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    payload = decode_access_token(raw_token)
+    user_id: Optional[str] = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User associated with token not found.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is deactivated.",
+        )
+
+    return user
+
+
+def get_current_super_admin_flexible(
+    current_user: User = Depends(get_current_user_flexible),
+) -> User:
+    """Super Admin dependency supporting both Bearer header and ?token= query parameter."""
     if not current_user.is_super_admin and current_user.role != "super_admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

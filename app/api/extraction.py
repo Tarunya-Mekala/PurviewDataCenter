@@ -1,10 +1,11 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_super_admin
+from app.core.security import get_current_super_admin, get_current_super_admin_flexible
 from app.models.user import User
 from app.schemas.record import (
     AIExtractionRequest,
@@ -124,3 +125,168 @@ def extract_all_documents(
     current_user: User = Depends(get_current_super_admin),
 ):
     return ExtractionService.extract_all_project_documents(db, project_id)
+
+
+# ---------------------------------------------------------
+# Excel Representation & Export Endpoints
+# ---------------------------------------------------------
+
+EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get(
+    "/documents/{document_id}/excel",
+    summary="Show or download extracted document as Excel",
+    description="Export extracted document records into an Excel workbook (.xlsx) or view as interactive spreadsheet (with ?view=html).",
+    responses={
+        200: {
+            "content": {
+                EXCEL_MIME: {},
+                "text/html": {},
+            },
+            "description": "Returns the generated Excel workbook (.xlsx) or HTML spreadsheet view.",
+        }
+    },
+)
+@router.get(
+    "/documents/{document_id}/export/excel",
+    summary="Download extracted document as Excel workbook (.xlsx)",
+    description="Direct download endpoint for the styled Excel workbook (.xlsx) of an extracted document.",
+    responses={
+        200: {
+            "content": {
+                EXCEL_MIME: {},
+            },
+            "description": "Returns the generated Excel workbook (.xlsx).",
+        }
+    },
+)
+def get_document_excel(
+    document_id: str,
+    view: Optional[str] = Query(None, description="Set to 'html' to view interactive spreadsheet in browser"),
+    token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser access"),
+    accept: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_super_admin_flexible),
+):
+    if view == "html" or (accept and "text/html" in accept and "application" not in accept):
+        html_content = ExtractionService.render_excel_html_view(db, document_id, token=token)
+        return HTMLResponse(content=html_content, status_code=200)
+
+    excel_bytes, filename = ExtractionService.export_document_to_excel(db, document_id)
+    return Response(
+        content=excel_bytes,
+        media_type=EXCEL_MIME,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+@router.get(
+    "/documents/{document_id}/excel/view",
+    response_class=HTMLResponse,
+    summary="Show extracted document as interactive Excel spreadsheet in browser",
+    description="Renders a rich Excel spreadsheet interface in the browser with live search, filters, and download capabilities.",
+)
+def view_document_excel_html(
+    document_id: str,
+    token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser access"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_super_admin_flexible),
+):
+    html_content = ExtractionService.render_excel_html_view(db, document_id, token=token)
+    return HTMLResponse(content=html_content, status_code=200)
+
+
+@router.get(
+    "/documents/{document_id}/excel/preview",
+    summary="Get extracted document as Excel spreadsheet grid JSON",
+    description="Returns structured columns, rows, and summary metrics for client spreadsheet or data grid rendering.",
+)
+def preview_document_excel_json(
+    document_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_super_admin_flexible),
+):
+    return ExtractionService.get_document_excel_preview(db, document_id)
+
+
+@router.get(
+    "/projects/{project_id}/excel",
+    summary="Download or view all project extracted documents as Excel",
+    description="Export all extracted line items and document summaries across a project into a multi-sheet Excel workbook (.xlsx).",
+    responses={
+        200: {
+            "content": {
+                EXCEL_MIME: {},
+                "text/html": {},
+            },
+            "description": "Returns the consolidated project Excel workbook (.xlsx) or HTML spreadsheet view.",
+        }
+    },
+)
+@router.get(
+    "/projects/{project_id}/export/excel",
+    summary="Download all project extracted documents as Excel (.xlsx)",
+    description="Direct download endpoint for consolidated project Excel workbook.",
+    responses={
+        200: {
+            "content": {
+                EXCEL_MIME: {},
+            },
+            "description": "Returns the consolidated project Excel workbook (.xlsx).",
+        }
+    },
+)
+def get_project_excel(
+    project_id: str,
+    view: Optional[str] = Query(None, description="Set to 'html' to view interactive spreadsheet in browser"),
+    token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser access"),
+    accept: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_super_admin_flexible),
+):
+    if view == "html" or (accept and "text/html" in accept and "application" not in accept):
+        html_content = ExtractionService.render_project_excel_html_view(db, project_id, token=token)
+        return HTMLResponse(content=html_content, status_code=200)
+
+    excel_bytes, filename = ExtractionService.export_project_to_excel(db, project_id)
+    return Response(
+        content=excel_bytes,
+        media_type=EXCEL_MIME,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+@router.get(
+    "/projects/{project_id}/excel/view",
+    response_class=HTMLResponse,
+    summary="Show project extracted records as interactive Excel spreadsheet in browser",
+    description="Renders a responsive Excel spreadsheet interface for all extracted records across a project.",
+)
+def view_project_excel_html(
+    project_id: str,
+    token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser access"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_super_admin_flexible),
+):
+    html_content = ExtractionService.render_project_excel_html_view(db, project_id, token=token)
+    return HTMLResponse(content=html_content, status_code=200)
+
+
+@router.get(
+    "/projects/{project_id}/excel/preview",
+    summary="Get project extracted records as Excel spreadsheet grid JSON",
+    description="Returns structured columns and rows for all project records formatted as a spreadsheet table.",
+)
+def preview_project_excel_json(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_super_admin_flexible),
+):
+    return ExtractionService.get_project_excel_preview(db, project_id)

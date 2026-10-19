@@ -802,3 +802,42 @@ class ExtractionService:
             by_record_type=by_type,
             by_vendor=by_vendor,
         )
+
+    # ------------------------------------------------------------------
+    # Excel Export & Spreadsheet Views
+    # ------------------------------------------------------------------
+    @staticmethod
+    def export_document_to_excel(db: Session, document_id: str) -> Tuple[bytes, str]:
+        """Export extracted records for a document as an Excel workbook (.xlsx)."""
+        from app.services.report_service import ReportService
+        return ReportService.generate_document_excel(db, document_id)
+
+    @staticmethod
+    def export_project_to_excel(db: Session, project_id: str) -> Tuple[bytes, str]:
+        """Export extracted records for an entire project as an Excel workbook (.xlsx)."""
+        from app.services.report_service import ReportService
+        return ReportService.generate_project_excel(db, project_id)
+
+    @staticmethod
+    def get_document_excel_preview(db: Session, document_id: str) -> Dict[str, Any]:
+        """Return structured spreadsheet representation for UI grid components."""
+        from app.services.report_service import ReportService
+        return ReportService.get_document_excel_preview(db, document_id)
+
+    @staticmethod
+    def get_project_excel_preview(db: Session, project_id: str) -> Dict[str, Any]:
+        """Return structured project spreadsheet representation for UI grid components."""
+        from app.services.report_service import ReportService
+        return ReportService.get_project_excel_preview(db, project_id)
+
+    @staticmethod
+    def render_excel_html_view(db: Session, document_id: str, token: Optional[str] = None) -> str:
+        """Render interactive spreadsheet web UI for a document."""
+        from app.services.report_service import ReportService
+        return ReportService.render_excel_html_view(db, document_id, token=token)
+
+    @staticmethod
+    def render_project_excel_html_view(db: Session, project_id: str, token: Optional[str] = None) -> str:
+        """Render interactive spreadsheet web UI for a project."""
+        from app.services.report_service import ReportService
+        return ReportService.render_project_excel_html_view(db, project_id, token=token)
