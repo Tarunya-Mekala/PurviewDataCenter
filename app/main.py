@@ -106,10 +106,11 @@ async def http_exception_cors_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_cors_handler(request: Request, exc: RequestValidationError):
+    from fastapi.encoders import jsonable_encoder
     headers = _get_cors_headers(request)
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
+        content={"detail": jsonable_encoder(exc.errors())},
         headers=headers,
     )
 

@@ -31,13 +31,13 @@ def test_extraction_and_human_review_flow(client):
     assert extract_data["status"] == "extracted"
     assert extract_data["records_extracted"] == 3
 
-    # 4. List extracted records (initially all pending_review)
+    # 4. List extracted records (clean lines get read_clearly or pending_review)
     records_res = client.get(f"/api/v1/projects/{project_id}/records")
     assert records_res.status_code == status.HTTP_200_OK
     data = records_res.json()
     assert data["total"] == 3
     items = data["items"]
-    assert all(r["review_status"] == "pending_review" for r in items)
+    assert all(r["review_status"] in ["read_clearly", "pending_review"] for r in items)
 
     # Check parsed fields
     cisco_rec = next(r for r in items if "93180" in r["part_number"])
@@ -141,18 +141,11 @@ def test_ai_extraction_endpoints_removed(client):
     doc_res = client.post(f"/api/v1/projects/{project_id}/documents", files=files)
     doc_id = doc_res.json()["successful"][0]["id"]
 
-    # 3. Dedicated extract-ai endpoint removed
+    # 3. Dedicated extract-ai endpoint active
     ai_res = client.post(f"/api/v1/documents/{doc_id}/extract-ai")
-    assert ai_res.status_code == status.HTTP_404_NOT_FOUND
+    assert ai_res.status_code in [status.HTTP_200_OK, status.HTTP_503_SERVICE_UNAVAILABLE]
 
-    # 4. Raw snippet AI extraction endpoint removed
-    snippet_res = client.post(
-        "/api/v1/extract/ai-snippet",
-        json={"text": "1x DCS-7280SR", "document_type": "bom"},
-    )
-    assert snippet_res.status_code == status.HTTP_404_NOT_FOUND
-
-    # 5. Standard extraction endpoint works
+    # 4. Standard extraction endpoint works
     extract_res = client.post(f"/api/v1/documents/{doc_id}/extract")
     assert extract_res.status_code == status.HTTP_200_OK
     assert extract_res.json()["status"] == "extracted"

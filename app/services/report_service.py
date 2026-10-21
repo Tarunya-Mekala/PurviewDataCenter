@@ -723,7 +723,8 @@ class ReportService:
             "rows": rows,
             "summary": {
                 "total": len(records),
-                "approved": sum(1 for r in records if r.review_status == ReviewStatus.APPROVED.value),
+                "approved": sum(1 for r in records if r.review_status in [ReviewStatus.APPROVED.value, "read_clearly"]),
+                "read_clearly": sum(1 for r in records if r.review_status == "read_clearly"),
                 "pending": sum(1 for r in records if r.review_status == ReviewStatus.PENDING_REVIEW.value),
                 "modified": sum(1 for r in records if r.review_status == ReviewStatus.MODIFIED.value),
                 "rejected": sum(1 for r in records if r.review_status == ReviewStatus.REJECTED.value),
@@ -788,6 +789,20 @@ class ReportService:
                 r.review_status,
             ])
 
+        summary = {
+            "total": len(records),
+            "approved": sum(1 for r in records if r.review_status in [ReviewStatus.APPROVED.value, "read_clearly"]),
+            "pending": sum(1 for r in records if r.review_status == ReviewStatus.PENDING_REVIEW.value),
+            "modified": sum(1 for r in records if r.review_status == ReviewStatus.MODIFIED.value),
+            "rejected": sum(1 for r in records if r.review_status == ReviewStatus.REJECTED.value),
+            "read_clearly": sum(1 for r in records if r.review_status == "read_clearly"),
+            "avg_confidence": (
+                round(sum(r.confidence_score for r in records) / len(records) * 100, 1)
+                if records
+                else 0.0
+            ),
+        }
+
         return {
             "project_id": project.id,
             "project_name": project.name,
@@ -795,6 +810,7 @@ class ReportService:
             "sheet_name": "All Project Records",
             "columns": headers,
             "rows": rows,
+            "summary": summary,
         }
 
     # ------------------------------------------------------------------

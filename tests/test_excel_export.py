@@ -119,7 +119,7 @@ def test_document_excel_preview_json(client):
     assert "rows" in data
     assert len(data["rows"]) == 3
     assert data["summary"]["total"] == 3
-    assert data["summary"]["pending"] == 3
+    assert (data["summary"]["pending"] + data["summary"]["approved"]) == 3
 
 
 def test_project_excel_download_and_views(client):

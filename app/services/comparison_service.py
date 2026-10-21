@@ -42,7 +42,7 @@ class ComparisonService:
     ) -> ComparisonResponse:
         """Compare approved plan records against approved vendor delivery records."""
         project = db.get(Project, project_id)
-        if not project or project.is_deleted:
+        if not project or getattr(project, "is_deleted", False):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project '{project_id}' not found.",
@@ -542,7 +542,7 @@ class ComparisonService:
     ) -> ComparisonResultsListResponse:
         """Fetch granular comparison result lines for a project with filters and pagination."""
         project = db.get(Project, project_id)
-        if not project or project.is_deleted:
+        if not project or getattr(project, "is_deleted", False):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project '{project_id}' not found.",
@@ -596,7 +596,7 @@ class ComparisonService:
     ) -> IssueGroupListResponse:
         """Retrieve issue groups summarizing common discrepancies and exceptions."""
         project = db.get(Project, project_id)
-        if not project or project.is_deleted:
+        if not project or getattr(project, "is_deleted", False):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project '{project_id}' not found.",
@@ -615,7 +615,7 @@ class ComparisonService:
     def get_runs(db: Session, project_id: str) -> ComparisonRunListResponse:
         """Retrieve comparison runs history for a project."""
         project = db.get(Project, project_id)
-        if not project or project.is_deleted:
+        if not project or getattr(project, "is_deleted", False):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project '{project_id}' not found.",

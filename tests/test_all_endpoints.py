@@ -193,10 +193,10 @@ def test_documents_and_upload_lifecycle(client):
 
 
 def test_ai_and_extraction_endpoints(client, monkeypatch):
-    """Test AI extraction endpoints removed (404) and background extraction retained (202)."""
-    # 1. GET /ai/status (removed)
+    """Test AI extraction endpoints active (200) and background extraction retained (202)."""
+    # 1. GET /ai/status (active)
     ai_status = client.get("/api/v1/ai/status")
-    assert ai_status.status_code == status.HTTP_404_NOT_FOUND
+    assert ai_status.status_code == status.HTTP_200_OK
 
     # 2. POST /extract/ai-snippet (removed)
     snippet_res = client.post(

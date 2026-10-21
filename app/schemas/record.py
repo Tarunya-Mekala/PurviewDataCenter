@@ -244,7 +244,7 @@ class ExcelGridPreviewResponse(BaseModel):
     sheet_name: str
     columns: List[str]
     rows: List[List[Any]]
-    summary: Dict[str, Any]
+    summary: Optional[Dict[str, Any]] = None
 
 
 

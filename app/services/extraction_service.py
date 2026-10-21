@@ -1715,7 +1715,7 @@ class ExtractionService:
     def get_review_summary(db: Session, project_id: str) -> ReviewSummaryResponse:
         """Problem 21 & Issue 12: Compute review summary; return 404 for deleted or non-existent projects."""
         project = db.get(Project, project_id)
-        if not project or project.is_deleted:
+        if not project or getattr(project, "is_deleted", False):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project '{project_id}' not found.",
