@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -16,11 +16,13 @@ class RecordType(str, Enum):
     RACK_ITEM = "rack_item"
     CABLE_ITEM = "cable_item"
     POWER_ITEM = "power_item"
+    VENDOR_QUOTE_ITEM = "vendor_quote_item"
+    CABLE = "cable"
     OTHER = "other"
 
 
 class ExtractedRecordBase(BaseModel):
-    record_type: RecordType = Field(default=RecordType.BOM_ITEM, description="Record category")
+    record_type: Union[RecordType, str] = Field(default=RecordType.BOM_ITEM, description="Record category")
     category: Optional[str] = Field(None, description="Equipment category (e.g. Switch, Server, PDU)")
     part_number: Optional[str] = Field(None, description="Manufacturer part number or model as written")
     cleaned_part_number: Optional[str] = Field(None, description="Standardized part number stripped of minor revision tags")
@@ -53,7 +55,7 @@ class ExtractedRecordCreate(ExtractedRecordBase):
 
 class ExtractedRecordUpdate(BaseModel):
     """Used to edit/correct extracted record fields."""
-    record_type: Optional[RecordType] = None
+    record_type: Optional[Union[RecordType, str]] = None
     category: Optional[str] = None
     part_number: Optional[str] = None
     cleaned_part_number: Optional[str] = None

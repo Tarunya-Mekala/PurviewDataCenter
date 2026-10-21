@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_super_admin, get_current_super_admin_flexible
+from app.core.security import get_current_super_admin
 from app.models.user import User
 from app.schemas.record import (
     DocumentExtractionStatusResponse,
@@ -11,7 +11,6 @@ from app.schemas.record import (
 from app.services.extraction_service import ExtractionService
 
 router = APIRouter(tags=["Document Parsing & Extraction"])
-
 
 # ---------------------------------------------------------
 # Document Extraction & Triggers
@@ -35,8 +34,7 @@ def extract_document(
 @router.get(
     "/documents/{document_id}/extraction-status",
     response_model=DocumentExtractionStatusResponse,
-    summary="Get document extraction progress",
-    description="Check processing state, number of records extracted, and review decision breakdown.",
+    summary="Get extraction status",
 )
 def get_document_extraction_status(
     document_id: str,

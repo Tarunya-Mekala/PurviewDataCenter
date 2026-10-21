@@ -242,7 +242,8 @@ class EndpointTester:
 
         # 3. Extract all project documents
         r = self.client.post(f"/api/v1/projects/{proj_id}/extract-all", headers=self.headers)
-        self.log("Extraction", "POST", "/api/v1/projects/{id}/extract-all", r.status_code, [200, 202], f"Extracted docs: {r.json().get('total_documents', r.json().get('message'))}")
+        docs_info = len(r.json()) if isinstance(r.json(), list) else r.json().get('total_documents', r.json().get('message'))
+        self.log("Extraction", "POST", "/api/v1/projects/{id}/extract-all", r.status_code, [200, 202], f"Extracted docs: {docs_info}")
 
     # -------------------------------------------------------------
     # 7. Records & Review
