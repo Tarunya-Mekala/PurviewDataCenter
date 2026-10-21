@@ -212,7 +212,7 @@ class ExtractedRecord(Base):
         default="pending_review",
         nullable=False,
         index=True,
-    )  # "pending_review", "approved", "modified", "rejected"
+    )
     reviewed_by: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,

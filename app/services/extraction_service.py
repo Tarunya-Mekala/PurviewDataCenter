@@ -1779,4 +1779,3 @@ class ExtractionService:
             by_vendor=by_vendor,
             by_manufacturer=by_manufacturer,
         )
-

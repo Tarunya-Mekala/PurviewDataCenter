@@ -1,54 +1,43 @@
-import sys
 from logging.config import fileConfig
 from pathlib import Path
-
-# Add project root to sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import sys
 
 from alembic import context
 from alembic.script import ScriptDirectory
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from app.core.config import settings
 from app.core.database import Base, engine
-
-# Import all models so Alembic detects all tables and metadata
-import app.models  # noqa: F401
+import app.models
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-if settings.DATABASE_URL:
+if hasattr(settings, "DATABASE_URL") and settings.DATABASE_URL:
     config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 target_metadata = Base.metadata
 
 
-def process_revision_directives(context, revision, directives):
-    """Ensure revisions are named sequentially: 001, 002, 003, etc."""
+def process_revision_directives(migration_context, revision, directives):
     if not directives:
         return
+
     migration_script = directives[0]
-    head_revision = ScriptDirectory.from_config(context.config).get_current_head()
-
-    if head_revision is None:
-        new_rev_id = 1
-    else:
-        try:
-            last_rev_id = int(head_revision.lstrip("0") or "0")
-            new_rev_id = last_rev_id + 1
-        except ValueError:
-            new_rev_id = 1
-
-    migration_script.rev_id = f"{new_rev_id:03d}"
+    head_revision = ScriptDirectory.from_config(config).get_current_head()
+    try:
+        next_revision = int(head_revision.lstrip("0") or "0") + 1 if head_revision else 1
+    except ValueError:
+        next_revision = 1
+    migration_script.rev_id = f"{next_revision:03d}"
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode."""
-    url = str(engine.url)
     context.configure(
-        url=url,
+        url=str(engine.url),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -62,13 +51,11 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    is_sqlite = engine.url.drivername.startswith("sqlite")
     with engine.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            render_as_batch=is_sqlite,
+            render_as_batch=engine.url.drivername.startswith("sqlite"),
             process_revision_directives=process_revision_directives,
             compare_type=True,
         )

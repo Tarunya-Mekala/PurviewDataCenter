@@ -1,340 +1,165 @@
-BOM_EXTRACTION_PROMPT = """You are an expert AI Data Center Infrastructure and Hardware Engineer specializing in Bill of Materials (BOM) extraction.
-Analyze the following document text and extract all hardware line items into structured JSON.
+from __future__ import annotations
 
-For each item, identify:
-- part_number: The manufacturer part number, model, or order code (e.g. "N9K-C93180YC-FX", "DCS-7050TX3-48C8", "PowerEdge R750").
-- description: Full product description and specifications.
-- quantity: Numeric quantity (float/integer). Defaults to 1.0 if not specified.
-- unit: Unit of measure (e.g. "pcs", "meters", "ft", "spool"). Defaults to "pcs".
-- vendor: Manufacturer or vendor brand (e.g. "Cisco", "Arista", "Dell", "Schneider", "Panduit", "APC").
-- category: Hardware category (e.g. "Switch", "Router", "Server", "Transceiver", "PDU", "Cable", "Optics", "Patch Panel").
-- location: Physical location, cabinet, or rack elevation if specified.
-- confidence_score: Confidence in extraction between 0.0 and 1.0.
 
-Respond strictly with a JSON object matching this schema:
-{
-  "records": [
-    {
-      "part_number": "string or null",
-      "description": "string or null",
-      "quantity": 1.0,
-      "unit": "pcs",
-      "vendor": "string or null",
-      "category": "string or null",
-      "location": "string or null",
-      "confidence_score": 0.95
-    }
-  ]
+CANONICAL_FIELDS = {
+    "equipment_name": (
+        "Name of the equipment, device, product or physical item."
+    ),
+    "part_number": (
+        "Part number, SKU, item code, product code or equivalent identifier."
+    ),
+    "description": (
+        "Detailed description of the item."
+    ),
+    "model": (
+        "Model number or model name."
+    ),
+    "manufacturer": (
+        "Manufacturer or maker of the equipment."
+    ),
+    "vendor": (
+        "Supplier, vendor or seller."
+    ),
+    "quantity": (
+        "Number of units/items."
+    ),
+    "unit": (
+        "Unit of measurement such as pcs, units, meters, kW."
+    ),
+    "rack_id": (
+        "Rack identifier such as R01, Rack-12."
+    ),
+    "u_position": (
+        "Rack U-position or mounting position."
+    ),
+    "source_device": (
+        "Origin/source device for a connection."
+    ),
+    "source_port": (
+        "Origin/source port."
+    ),
+    "target_device": (
+        "Destination/target device."
+    ),
+    "target_port": (
+        "Destination/target port."
+    ),
+    "cable_type": (
+        "Cable type."
+    ),
+    "length": (
+        "Cable or physical length."
+    ),
+    "power_watts": (
+        "Power requirement or rating in watts."
+    ),
+    "dimensions": (
+        "Physical dimensions."
+    ),
 }
 
-Document Content:
-\"\"\"
-{content}
-\"\"\"
-"""
 
+def build_extraction_prompt(
+    document_content: str,
+    document_category: str,
+    source_file_name: str,
+) -> str:
 
-P2P_EXTRACTION_PROMPT = """You are an expert Data Center Network and Cabling Engineer specializing in Point-to-Point (P2P) cable schedules and patch lists.
-Analyze the following document text and extract all cable connection records into structured JSON.
+    field_description = "\n".join(
+        f"- {field}: {description}"
+        for field, description in CANONICAL_FIELDS.items()
+    )
 
-For each connection, identify:
-- source_device: Origin device or patch panel name (e.g. "Leaf-01", "Core-SW-A", "Rack-A01-PP1").
-- source_port: Origin port identifier (e.g. "Eth1/1", "Port 24", "Slot 2/Port 1").
-- target_device: Destination device or patch panel name (e.g. "Spine-01", "Server-01-NIC1").
-- target_port: Destination port identifier.
-- cable_type: Media type (e.g. "Cat6A", "OM4 MPO", "OS2 LC-LC", "100G QSFP28 DAC", "AOC").
-- part_number: Cable assembly part number if mentioned.
-- description: Details regarding length, color, or pathway.
-- quantity: Number of cables/connections (defaults to 1.0).
-- vendor: Cable manufacturer if mentioned.
-- confidence_score: Confidence in extraction between 0.0 and 1.0.
+    return f"""
+You are an enterprise data-center document extraction system.
 
-Respond strictly with a JSON object matching this schema:
-{
-  "records": [
-    {
-      "source_device": "string or null",
-      "source_port": "string or null",
-      "target_device": "string or null",
-      "target_port": "string or null",
-      "cable_type": "string or null",
-      "part_number": "string or null",
-      "description": "string or null",
-      "quantity": 1.0,
-      "vendor": "string or null",
-      "confidence_score": 0.90
-    }
-  ]
-}
+Your task is to extract structured engineering/inventory information
+from a heterogeneous source document.
 
-IMPORTANT EXTRACTION REQUIREMENT
+DOCUMENT CATEGORY:
+{document_category}
 
-The source document may contain ANY combination of:
+SOURCE FILE:
+{source_file_name}
 
-1. Excel-style tables
-2. PDF tables
-3. DOCX tables
-4. Images of tables
-5. Rows
-6. Columns
-7. Free-form text
-8. Architecture diagrams
-9. Rack diagrams
-10. Network diagrams
-11. Power diagrams
-12. Cable diagrams
-13. Labels connected by lines/arrows
-14. Multiple tables on the same page
-15. Multiple sheets in the same workbook
+The source document may contain completely different terminology,
+column names, layouts, ordering, spelling or formatting.
 
-You MUST inspect all supplied content.
+You MUST perform semantic mapping based on the meaning of the
+headers AND the values.
 
-Do NOT assume that the first row is always
-the header.
+Do NOT rely on:
+- exact column names
+- fixed column positions
+- fixed sheet names
+- fixed row numbers
+- a specific vendor format
 
-Do NOT assume that the first column is always
-the identifier.
+CANONICAL FIELDS:
 
-Do NOT assume fixed column names.
+{field_description}
 
-Do NOT assume fixed column positions.
+SEMANTIC MAPPING EXAMPLES:
 
-Do NOT assume a fixed table structure.
+"Equipment", "Device", "Product", "Item", "Asset"
+    -> equipment_name
 
-Do NOT ignore data simply because its column
-name is unfamiliar.
+"SKU", "Part No", "Part Number", "Item Code", "Product Code"
+    -> part_number
 
-SEMANTIC COLUMN MAPPING
+"Qty", "Quantity", "Count", "Units", "No. of Items"
+    -> quantity
 
-Map source fields according to their meaning.
+"Vendor", "Supplier", "Seller"
+    -> vendor
 
-Examples:
+"Mfr", "Manufacturer", "Maker", "Brand"
+    -> manufacturer
 
-"MFR" -> manufacturer
+"Rack", "Rack ID", "Rack Number"
+    -> rack_id
 
-"Manufacturer Name" -> manufacturer
+"U", "U Position", "Rack Position"
+    -> u_position
 
-"Maker" -> manufacturer
+IMPORTANT RULES:
 
-"ITEM NAME" -> equipment_name
+1. Extract every valid record.
 
-"Product Name" -> equipment_name
+2. Semantically map source fields to canonical fields.
 
-"Device" -> equipment_name
+3. The same source field may have different names in different
+   documents.
 
-"PART NO" -> part_number
+4. Column position has NO semantic meaning.
 
-"Item Code" -> part_number
+5. Do not assume the first column is the equipment name.
 
-"SKU" -> part_number
+6. Do not assume the second column is the part number.
 
-"QTY" -> quantity
+7. Preserve values exactly when possible.
 
-"Quantity" -> quantity
+8. Do not invent missing information.
 
-"Count" -> quantity
+9. If a field is not present, return null.
 
-Use the actual values and surrounding context
-when determining the meaning.
+10. If the source contains extra useful fields that do not fit the
+    canonical fields, preserve them in extra_fields.
 
-TABLE EXTRACTION
+11. Do not merge different physical items unless the source clearly
+    indicates they are the same item.
 
-For every table:
+12. Keep the original source information in raw_data.
 
-- preserve every available row
-- preserve every available column
-- preserve values even when some cells are empty
-- identify likely headers semantically
-- preserve source information in raw_data
-- do not drop unknown columns
-- place unmapped information in extra_fields
+13. Provide a confidence score between 0 and 1.
 
-If a document contains several tables,
-process all of them.
+14. High confidence means the semantic mapping is clear.
 
-ARCHITECTURE / DIAGRAM EXTRACTION
+15. Low confidence means the mapping is ambiguous.
 
-If the document contains an architecture,
-rack, power, network or cable diagram:
+16. Return valid JSON only.
 
-Identify:
+SOURCE DOCUMENT:
 
-- components
-- devices
-- racks
-- ports
-- labels
-- power units
-- cable labels
-- connections
-- source and target devices
-- source and target ports
-- relationships
-
-Do not treat diagram text as unrelated text
-when visual/structural information indicates
-that the elements are connected.
-
-When an exact relationship cannot be determined,
-do not invent it.
-
-Store the available information in:
-
-- raw_data
-- extra_fields
-
-CATEGORY-SPECIFIC FIELDS
-
-Prioritize these fields for this category:
-
-{prioritized_fields}
-
-CANONICAL FIELDS
-
-{canonical_fields}
-
-EXTRACTION RULES
-
-1. Extract all available relevant records.
-
-2. Do not invent values.
-
-3. If a value cannot be determined,
-   return null.
-
-4. Preserve the original value in raw_data
-   when useful.
-
-5. Preserve unmapped source fields in
-   extra_fields.
-
-6. Preserve source context whenever available.
-
-7. Confidence must be between 0 and 1.
-
-8. Use a lower confidence when the mapping
-   is ambiguous.
-
-9. Use category="{category}".
-
-10. record_type should describe the type of
-    extracted record.
-
-11. Do not merge two different physical
-    components into one record unless the
-    source clearly represents them as one item.
-
-12. Do not discard duplicate rows unless the
-    source explicitly indicates that they are
-    duplicates.
-
-13. Quantity must represent the source quantity,
-    not an inferred quantity.
-
-14. For diagrams, preserve relationship
-    information in raw_data or extra_fields.
-
-EXPECTED JSON
-
-Return ONLY JSON matching this structure:
-
-{{
-  "records": [
-    {{
-      "category": "{category}",
-      "record_type": "inventory_item",
-      "equipment_name": null,
-      "part_number": null,
-      "description": null,
-      "model": null,
-      "manufacturer": null,
-      "vendor": null,
-      "quantity": null,
-      "unit": null,
-      "rack_id": null,
-      "u_position": null,
-      "source_device": null,
-      "source_port": null,
-      "target_device": null,
-      "target_port": null,
-      "cable_type": null,
-      "length": null,
-      "power_watts": null,
-      "dimensions": null,
-      "confidence_score": 0.0,
-      "raw_data": {{}},
-      "extra_fields": {{}}
-    }}
-  ]
-}}
-
-SOURCE DOCUMENT CONTENT
-Document Content:
-\"\"\"
-{content}
-\"\"\"
-"""
-
-
-RACK_LAYOUT_EXTRACTION_PROMPT = """You are an expert Data Center Facilities Engineer specializing in Rack Elevation and Cabinet Space Planning.
-Analyze the following document text and extract all rack hardware allocations into structured JSON.
-
-For each mounted item, identify:
-- location: Rack identifier and U-elevation range (e.g. "Rack-A01 (U41-U42)", "Cabinet 102 (RU 15)").
-- part_number: Model or hardware code.
-- description: Equipment installed in the rack unit.
-- vendor: Manufacturer.
-- category: Equipment type (e.g. "TOR Switch", "Compute Node", "Storage Array", "PDU", "Cable Management").
-- quantity: Count of units installed.
-- confidence_score: Confidence in extraction between 0.0 and 1.0.
-
-Respond strictly with a JSON object matching this schema:
-{
-  "records": [
-    {
-      "location": "string or null",
-      "part_number": "string or null",
-      "description": "string or null",
-      "vendor": "string or null",
-      "category": "string or null",
-      "quantity": 1.0,
-      "confidence_score": 0.90
-    }
-  ]
-}
-
-Document Content:
-\"\"\"
-{content}
-\"\"\"
-"""
-
-
-GENERIC_EXTRACTION_PROMPT = """You are an AI Data Center Engineer. Extract all data center hardware, cables, power units, or components from the following text into structured JSON.
-
-Respond strictly with a JSON object matching this schema:
-{
-  "records": [
-    {
-      "part_number": "string or null",
-      "description": "string or null",
-      "quantity": 1.0,
-      "unit": "pcs",
-      "vendor": "string or null",
-      "category": "string or null",
-      "location": "string or null",
-      "source_device": "string or null",
-      "source_port": "string or null",
-      "target_device": "string or null",
-      "target_port": "string or null",
-      "cable_type": "string or null",
-      "confidence_score": 0.85
-    }
-  ]
-}
-
-Document Content:
-\"\"\"
-{content}
-\"\"\"
+{document_content}
 """

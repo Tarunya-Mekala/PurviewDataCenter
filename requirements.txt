@@ -31,6 +31,8 @@ PyMuPDF
 pdfplumber
 python-docx
 Pillow
+pytesseract
+opencv-python-headless
 
 # -------------------------
 # LangChain
