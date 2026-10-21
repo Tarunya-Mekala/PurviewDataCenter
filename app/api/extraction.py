@@ -1,123 +1,223 @@
-from typing import List, Optional
+from typing import List
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Query,
+    status,
+)
+
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_super_admin
+from app.core.security import (
+    get_current_super_admin,
+)
+
 from app.models.user import User
+
 from app.schemas.record import (
-    AIExtractionRequest,
     DocumentExtractionStatusResponse,
     ExtractionJobResponse,
     RawTextExtractionRequest,
 )
-from app.services.extraction_service import ExtractionService
 
-router = APIRouter(tags=["Document Parsing & AI Extraction"])
+from app.services.extraction_service import (
+    ExtractionService,
+)
 
 
-# ---------------------------------------------------------
-# AI Status & Model Inspection
-# ---------------------------------------------------------
+router = APIRouter(
+    tags=[
+        "Document Parsing & AI Extraction"
+    ]
+)
+
 
 @router.get(
     "/ai/status",
-    summary="Check AI LLM Engine Status",
-    description="Inspect LLM engine status, provider, and active model.",
+    summary="Check AI Extraction Engine Status",
 )
 def get_ai_status(
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(
+        get_current_super_admin
+    ),
 ):
-    from app.ai.llm import llm_client
+
     from app.core.config import settings
 
     return {
+
         "status": "online",
-        "provider": settings.LLM_PROVIDER,
-        "configured_model": settings.LLM_MODEL,
-        "temperature": settings.LLM_TEMPERATURE,
+
+        "provider": (
+            settings.LLM_PROVIDER
+        ),
+
+        "configured_model": (
+            settings.LLM_MODEL
+        ),
+
+        "temperature": (
+            settings.LLM_TEMPERATURE
+        ),
     }
 
-
-# ---------------------------------------------------------
-# Document Extraction & AI Triggers
-# ---------------------------------------------------------
 
 @router.post(
     "/documents/{document_id}/extract",
     response_model=ExtractionJobResponse,
     status_code=status.HTTP_200_OK,
-    summary="Extract structured records from document",
-    description="Parse tabular sheets, PDF tables, or CSV data into structured equipment records. Supports optional AI LLM parsing.",
+    summary="Extract structured records",
 )
 def extract_document(
+
     document_id: str,
-    use_ai: bool = Query(False, description="Enable Qwen LLM AI-powered extraction"),
-    model: Optional[str] = Query(None, description="Specify LLM model (e.g. 'qwen2.5:27b')"),
+
+    use_ai: bool = Query(
+        False,
+        description=(
+            "Enable AI-powered "
+            "semantic extraction."
+        ),
+    ),
+
+    model: str | None = Query(
+        None,
+        description=(
+            "Optional AI model override."
+        ),
+    ),
+
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+
+    current_user: User = Depends(
+        get_current_super_admin
+    ),
 ):
-    return ExtractionService.extract_document(db, document_id, use_ai=use_ai, model=model)
+
+    return (
+        ExtractionService
+        .extract_document_with_ai(
+            db,
+            document_id,
+            model=model,
+        )
+    )
 
 
 @router.post(
     "/documents/{document_id}/extract-ai",
     response_model=ExtractionJobResponse,
     status_code=status.HTTP_200_OK,
-    summary="Extract document using AI LLM (Qwen 2.5 27B)",
-    description="Dedicated AI LLM extraction endpoint for reading complex hardware BOMs, PDF tables, and cable schedules.",
+    summary=(
+        "Extract category-specific "
+        "structured records"
+    ),
+    description=(
+        "Extract structured information from "
+        "Excel, PDF, DOCX, or image documents "
+        "according to the business category "
+        "such as BOM, P2P, Rack, Power, or Cable."
+    ),
 )
 def extract_document_ai(
+
     document_id: str,
-    request: Optional[AIExtractionRequest] = None,
+
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+
+    current_user: User = Depends(
+        get_current_super_admin
+    ),
 ):
-    model_override = request.model if request else None
-    return ExtractionService.extract_document_with_ai(db, document_id, model=model_override)
+
+    return (
+        ExtractionService
+        .extract_document_with_ai(
+            db,
+            document_id,
+        )
+    )
 
 
 @router.get(
     "/documents/{document_id}/extraction-status",
     response_model=DocumentExtractionStatusResponse,
-    summary="Get document extraction progress",
-    description="Check processing state, number of records extracted, and review decision breakdown.",
+    summary="Get extraction status",
 )
 def get_document_extraction_status(
+
     document_id: str,
+
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+
+    current_user: User = Depends(
+        get_current_super_admin
+    ),
 ):
-    return ExtractionService.get_document_extraction_status(db, document_id)
+
+    return (
+        ExtractionService
+        .get_document_extraction_status(
+            db,
+            document_id,
+        )
+    )
 
 
 @router.post(
     "/extract/ai-snippet",
-    summary="Extract records from raw text snippet using AI",
-    description="Directly parse an arbitrary snippet of hardware BOM text, email notes, or table into structured records without uploading a file.",
+    summary="Extract records from raw text",
 )
 def extract_snippet_ai(
+
     request: RawTextExtractionRequest,
-    current_user: User = Depends(get_current_super_admin),
+
+    current_user: User = Depends(
+        get_current_super_admin
+    ),
 ):
-    return ExtractionService.extract_raw_snippet_with_ai(
-        text=request.text,
-        document_type=request.document_type or "bom",
-        model=request.model,
+
+    return (
+        ExtractionService
+        .extract_raw_snippet_with_ai(
+
+            text=request.text,
+
+            document_type=(
+                request.document_type
+                or "bom"
+            ),
+
+            model=request.model,
+        )
     )
 
 
 @router.post(
     "/projects/{project_id}/extract-all",
-    response_model=List[ExtractionJobResponse],
+    response_model=List[
+        ExtractionJobResponse
+    ],
     status_code=status.HTTP_200_OK,
-    summary="Extract all documents in project",
-    description="Run the extraction pipeline on all uploaded documents within a project.",
+    summary="Extract all project documents",
 )
 def extract_all_documents(
+
     project_id: str,
+
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+
+    current_user: User = Depends(
+        get_current_super_admin
+    ),
 ):
-    return ExtractionService.extract_all_project_documents(db, project_id)
+
+    return (
+        ExtractionService
+        .extract_all_project_documents(
+            db,
+            project_id,
+        )
+    )

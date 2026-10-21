@@ -3,63 +3,168 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from app.ai.llm import llm_client
-from app.ai.prompts.extraction_prompt import build_extraction_prompt
+from app.ai.prompts.extraction_prompt import (
+    build_extraction_prompt,
+)
 from app.schemas.inventory import (
     CanonicalInventoryDocument,
-    CanonicalInventoryRecord,
 )
 
 
 LLM_RESPONSE_SCHEMA = {
     "type": "object",
+
     "properties": {
+
         "records": {
+
             "type": "array",
+
             "items": {
+
                 "type": "object",
+
                 "properties": {
-                    "category": {"type": "string"},
-                    "record_type": {"type": "string"},
-                    "equipment_name": {"type": "string", "nullable": True},
-                    "part_number": {"type": "string", "nullable": True},
-                    "description": {"type": "string", "nullable": True},
-                    "model": {"type": "string", "nullable": True},
-                    "manufacturer": {"type": "string", "nullable": True},
-                    "vendor": {"type": "string", "nullable": True},
-                    "quantity": {"type": "number", "nullable": True},
-                    "unit": {"type": "string", "nullable": True},
-                    "rack_id": {"type": "string", "nullable": True},
-                    "u_position": {"type": "string", "nullable": True},
-                    "source_device": {"type": "string", "nullable": True},
-                    "source_port": {"type": "string", "nullable": True},
-                    "target_device": {"type": "string", "nullable": True},
-                    "target_port": {"type": "string", "nullable": True},
-                    "cable_type": {"type": "string", "nullable": True},
-                    "length": {"type": "string", "nullable": True},
-                    "power_watts": {"type": "number", "nullable": True},
-                    "dimensions": {"type": "string", "nullable": True},
-                    "confidence_score": {"type": "number"},
-                    "raw_data": {"type": "object"},
-                    "extra_fields": {"type": "object"},
+
+                    "category": {
+                        "type": "string"
+                    },
+
+                    "record_type": {
+                        "type": "string"
+                    },
+
+                    "equipment_name": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "part_number": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "description": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "model": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "manufacturer": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "vendor": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "quantity": {
+                        "type": "number",
+                        "nullable": True,
+                    },
+
+                    "unit": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "rack_id": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "u_position": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "source_device": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "source_port": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "target_device": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "target_port": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "cable_type": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "length": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "power_watts": {
+                        "type": "number",
+                        "nullable": True,
+                    },
+
+                    "dimensions": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "confidence_score": {
+                        "type": "number"
+                    },
+
+                    "raw_data": {
+                        "type": "object"
+                    },
+
+                    "extra_fields": {
+                        "type": "object"
+                    },
                 },
+
                 "required": [
                     "category",
                     "record_type",
                 ],
             },
-        }
+        },
     },
-    "required": ["records"],
+
+    "required": [
+        "records",
+    ],
 }
 
 
-def _safe_float(value: Any) -> float | None:
+def _safe_float(
+    value: Any,
+) -> Optional[float]:
+
     if value is None:
         return None
 
     try:
         return float(value)
-    except (TypeError, ValueError):
+
+    except (
+        TypeError,
+        ValueError,
+    ):
         return None
 
 
@@ -68,51 +173,116 @@ def _validate_records(
     category: str,
 ) -> CanonicalInventoryDocument:
 
-    records: list[CanonicalInventoryRecord] = []
+    records = result.get(
+        "records",
+        [],
+    )
 
-    for item in result.get("records", []):
+    if not isinstance(
+        records,
+        list,
+    ):
+        records = []
 
-        item = dict(item)
+    validated_records = []
 
-        item["category"] = (
-            item.get("category")
-            or category
+    for record in records:
+
+        if not isinstance(
+            record,
+            dict,
+        ):
+            continue
+
+        record["category"] = (
+            str(
+                record.get(
+                    "category"
+                )
+                or category
+            )
+            .strip()
+            .lower()
         )
 
-        item["record_type"] = (
-            item.get("record_type")
-            or "inventory_item"
+        record["record_type"] = (
+            str(
+                record.get(
+                    "record_type"
+                )
+                or "inventory_item"
+            )
+            .strip()
         )
 
-        item["quantity"] = _safe_float(
-            item.get("quantity")
+        record[
+            "quantity"
+        ] = _safe_float(
+            record.get(
+                "quantity"
+            )
         )
 
-        item["power_watts"] = _safe_float(
-            item.get("power_watts")
+        record[
+            "power_watts"
+        ] = _safe_float(
+            record.get(
+                "power_watts"
+            )
         )
 
         confidence = _safe_float(
-            item.get("confidence_score")
+            record.get(
+                "confidence_score"
+            )
         )
 
         if confidence is None:
             confidence = 0.0
 
-        item["confidence_score"] = max(
+        confidence = max(
             0.0,
-            min(1.0, confidence)
+            min(
+                1.0,
+                confidence,
+            ),
         )
 
-        record = CanonicalInventoryRecord.model_validate(
-            item
+        record[
+            "confidence_score"
+        ] = confidence
+
+        if not isinstance(
+            record.get(
+                "raw_data"
+            ),
+            dict,
+        ):
+            record[
+                "raw_data"
+            ] = {}
+
+        if not isinstance(
+            record.get(
+                "extra_fields"
+            ),
+            dict,
+        ):
+            record[
+                "extra_fields"
+            ] = {}
+
+        validated_records.append(
+            record
         )
 
-        records.append(record)
+    result["records"] = (
+        validated_records
+    )
 
     return CanonicalInventoryDocument(
         document_category=category,
-        records=records,
+        records=validated_records,
     )
 
 
@@ -123,20 +293,56 @@ def extract_records_with_llm(
     *,
     text_content: Optional[str] = None,
     document_type: Optional[str] = None,
+    source_file_type: Optional[str] = None,
     model: Optional[str] = None,
 ) -> CanonicalInventoryDocument:
-    content = document_content if document_content is not None else (text_content or "")
-    category = document_category if document_category is not None else (document_type or "bom")
+
+    content = (
+        document_content
+        or text_content
+        or ""
+    )
+
+    category = (
+        document_category
+        or document_type
+        or "bom"
+    )
+
+    category = (
+        category
+        .strip()
+        .lower()
+    )
+
+    if not content.strip():
+
+        raise ValueError(
+            "No document content "
+            "was provided for AI extraction."
+        )
 
     prompt = build_extraction_prompt(
+
         document_content=content,
+
         document_category=category,
+
         source_file_name=source_file_name,
+
+        source_file_type=(
+            source_file_type
+            or ""
+        ),
     )
 
     result = llm_client.generate_json(
+
         prompt=prompt,
-        response_schema=LLM_RESPONSE_SCHEMA,
+
+        response_schema=(
+            LLM_RESPONSE_SCHEMA
+        ),
     )
 
     return _validate_records(
