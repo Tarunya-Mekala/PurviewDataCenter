@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ReviewStatus(str, Enum):
     PENDING_REVIEW = "pending_review"
     APPROVED = "approved"
+    READ_CLEARLY = "read_clearly"
     MODIFIED = "modified"
     REJECTED = "rejected"
 
@@ -144,13 +145,21 @@ class ExtractedRecordResponse(ExtractedRecordBase):
     is_deleted: bool = False
     source_sheet: Optional[str] = None
     source_row: Optional[int] = None
-    review_status: ReviewStatus
+    review_status: Union[ReviewStatus, str] = ReviewStatus.PENDING_REVIEW
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     review_notes: Optional[str] = None
     is_manually_added: bool
     created_at: datetime
     updated_at: datetime
+
+
+class RecordEvidenceResponse(BaseModel):
+    record_id: str
+    document_id: str
+    document_name: str
+    evidence_type: str
+    evidence: Dict[str, Any]
 
 
 class RecordListResponse(BaseModel):
@@ -224,5 +233,18 @@ class RecordEvidenceResponse(BaseModel):
     document_name: Optional[str] = None
     evidence_type: str = Field(..., description="'excel' | 'image' | 'text'")
     evidence: Dict[str, Any]
+
+
+class ExcelGridPreviewResponse(BaseModel):
+    document_id: Optional[str] = None
+    project_id: Optional[str] = None
+    document_name: Optional[str] = None
+    project_name: Optional[str] = None
+    total_records: int
+    sheet_name: str
+    columns: List[str]
+    rows: List[List[Any]]
+    summary: Dict[str, Any]
+
 
 

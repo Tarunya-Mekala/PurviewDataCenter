@@ -207,22 +207,31 @@ def verify_evidence_token(token: str) -> str:
 _login_attempts: dict = {}
 
 
-def check_login_rate_limit(key: str, max_attempts: int = 10, window_seconds: int = 60) -> None:
+def check_login_rate_limit(key: str, max_attempts: int = 5, window_seconds: int = 300) -> None:
     now = datetime.now(timezone.utc).timestamp()
     attempts = _login_attempts.get(key, [])
-    # Filter attempts within window
     attempts = [t for t in attempts if now - t < window_seconds]
     if len(attempts) >= max_attempts:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many login attempts. Please wait a minute before trying again.",
+            detail="Too many failed login attempts. Please wait 5 minutes before trying again.",
         )
+
+
+def record_login_failure(key: str, window_seconds: int = 300) -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    attempts = _login_attempts.get(key, [])
+    attempts = [t for t in attempts if now - t < window_seconds]
     attempts.append(now)
     _login_attempts[key] = attempts
 
 
+def reset_login_attempts(key: str) -> None:
+    _login_attempts.pop(key, None)
+
+
 def init_super_admin(db: Session) -> User:
-    """Ensure at least one super admin exists in the database on startup."""
+    """Ensure at least one super admin exists in the database on startup and sync password."""
     admin = db.execute(
         select(User).where(User.email == settings.SUPERADMIN_EMAIL)
     ).scalar_one_or_none()
@@ -237,6 +246,11 @@ def init_super_admin(db: Session) -> User:
             is_super_admin=True,
         )
         db.add(admin)
+        db.commit()
+        db.refresh(admin)
+    else:
+        # Sync password to latest environment setting
+        admin.hashed_password = hash_password(settings.SUPERADMIN_PASSWORD)
         db.commit()
         db.refresh(admin)
 

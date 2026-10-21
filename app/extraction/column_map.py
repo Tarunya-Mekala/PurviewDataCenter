@@ -123,6 +123,12 @@ def map_headers(headers: List[str]) -> Tuple[Dict[str, str], Dict[str, float]]:
             continue
 
         for canonical_field, synonyms in COLUMN_SYNONYMS.items():
+            if canonical_field == "quantity":
+                # Never map date columns to quantity (Problem 4 fix)
+                is_date = any(w in norm_h.split() or w == norm_h for w in ["received", "date", "timestamp", "time", "eta", "delivered"]) and not any(k in norm_h for k in ["qty", "quantity", "count", "units", "pcs"])
+                if is_date:
+                    continue
+
             for syn in synonyms:
                 norm_syn = normalize_header(syn)
                 if not norm_syn:

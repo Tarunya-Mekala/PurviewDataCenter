@@ -333,6 +333,21 @@ class DocumentService:
                         reason=f"Upload error: {str(e)}",
                     )
                 )
+        if successful:
+            try:
+                from app.api.audit import record_audit_log
+                record_audit_log(
+                    db=db,
+                    action="upload",
+                    resource_type="document",
+                    project_id=project_id,
+                    details={
+                        "count": len(successful),
+                        "files": [d.filename for d in successful],
+                    },
+                )
+            except Exception:
+                pass
 
         return DocumentUploadResult(successful=successful, failed=failed)
 
@@ -408,6 +423,20 @@ class DocumentService:
 
         db.commit()
         db.refresh(doc)
+
+        try:
+            from app.api.audit import record_audit_log
+            record_audit_log(
+                db=db,
+                action="upload",
+                resource_type="document",
+                resource_id=doc.id,
+                project_id=doc.project_id,
+                details={"filename": doc.filename, "version": doc.version, "action": "replace"},
+            )
+        except Exception:
+            pass
+
         return doc
 
     @staticmethod

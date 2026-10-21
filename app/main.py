@@ -48,6 +48,11 @@ from fastapi.openapi.docs import (
 )
 from fastapi.responses import HTMLResponse
 
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
 app = FastAPI(
     title=settings.APP_NAME,
     description="AI-powered document extraction and BOM reconciliation system.",
@@ -57,13 +62,76 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Enable CORS for frontend clients (e.g. Firebase hosting, local dev)
+def _get_cors_headers(request: Request) -> dict:
+    origin = request.headers.get("origin")
+    allowed_origin = origin if origin else "*"
+    return {
+        "Access-Control-Allow-Origin": allowed_origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD",
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, Range",
+        "Access-Control-Expose-Headers": "*",
+    }
+
+@app.middleware("http")
+async def outermost_cors_middleware(request: Request, call_next):
+    """Ensure every response (including unexpected exceptions and 500s) has CORS headers."""
+    if request.method == "OPTIONS":
+        return JSONResponse(status_code=200, content={"status": "ok"}, headers=_get_cors_headers(request))
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        headers = _get_cors_headers(request)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Internal Server Error: {str(exc)}"},
+            headers=headers,
+        )
+
+    for k, v in _get_cors_headers(request).items():
+        response.headers[k] = v
+    return response
+
+@app.exception_handler(HTTPException)
+async def http_exception_cors_handler(request: Request, exc: HTTPException):
+    headers = _get_cors_headers(request)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers,
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_cors_handler(request: Request, exc: RequestValidationError):
+    headers = _get_cors_headers(request)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+        headers=headers,
+    )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_cors_handler(request: Request, exc: Exception):
+    import traceback
+    traceback.print_exc()
+    headers = _get_cors_headers(request)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal Server Error: {str(exc)}"},
+        headers=headers,
+    )
+
+# Standard CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Include v1 API routes

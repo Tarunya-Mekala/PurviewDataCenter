@@ -205,15 +205,23 @@ class ComparisonResultItem(Base):
         String(100),
         nullable=True,
     )
-    expected: Mapped[float] = mapped_column(
+    expected: Mapped[Optional[float]] = mapped_column(
         Float,
-        default=0.0,
-        nullable=False,
+        nullable=True,
+        default=None,
     )
-    found: Mapped[float] = mapped_column(
+    found: Mapped[Optional[float]] = mapped_column(
         Float,
-        default=0.0,
-        nullable=False,
+        nullable=True,
+        default=None,
+    )
+    expected_text: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    found_text: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
     )
     difference: Mapped[float] = mapped_column(
         Float,

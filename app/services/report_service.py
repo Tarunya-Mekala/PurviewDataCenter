@@ -148,6 +148,18 @@ class ReportService:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
         filename = f"project_records_{safe_base}_{timestamp}.xlsx"
 
+        try:
+            from app.api.audit import record_audit_log
+            record_audit_log(
+                db=db,
+                action="export",
+                resource_type="export",
+                project_id=project_id,
+                details={"filename": filename, "format": "excel", "total_records": len(records)},
+            )
+        except Exception:
+            pass
+
         return output.getvalue(), filename
 
     # ------------------------------------------------------------------

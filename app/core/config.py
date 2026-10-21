@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # Initial Super Admin credentials
     SUPERADMIN_EMAIL: str = "admin@datacenter.ai"
-    SUPERADMIN_PASSWORD: str = "Admin@12345"
+    SUPERADMIN_PASSWORD: str = "DcAdmin!Secure2026#Xk9"
     SUPERADMIN_NAME: str = "Super Administrator"
 
     model_config = SettingsConfigDict(

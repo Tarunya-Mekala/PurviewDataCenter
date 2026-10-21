@@ -21,8 +21,10 @@ class ComparisonItem(BaseModel):
     vendor_id: Optional[str] = None
     vendor_name: Optional[str] = None
     category: Optional[str] = None
-    expected_quantity: float = 0.0
-    found_quantity: float = 0.0
+    expected_quantity: Optional[float] = None
+    found_quantity: Optional[float] = None
+    expected_text: Optional[str] = None
+    found_text: Optional[str] = None
     difference: float = 0.0
     status: ComparisonStatus
     condition_status: Optional[str] = None
@@ -69,8 +71,10 @@ class ComparisonResultLine(BaseModel):
     item: Optional[str] = None
     part_number: str
     field: Optional[str] = None
-    expected: float = 0.0
-    found: float = 0.0
+    expected: Optional[float] = None
+    found: Optional[float] = None
+    expected_text: Optional[str] = None
+    found_text: Optional[str] = None
     difference: float = 0.0
     result: str  # match | discrepancy | exception
     action: str

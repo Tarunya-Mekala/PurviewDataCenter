@@ -1,4 +1,4 @@
-"""Service for comparing approved plan records with approved vendor delivery records."""
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status
@@ -42,7 +42,7 @@ class ComparisonService:
     ) -> ComparisonResponse:
         """Compare approved plan records against approved vendor delivery records."""
         project = db.get(Project, project_id)
-        if not project:
+        if not project or project.is_deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project '{project_id}' not found.",
@@ -58,7 +58,12 @@ class ComparisonService:
         plan_records_query = select(ExtractedRecord).where(
             ExtractedRecord.document_id.in_(plan_doc_ids),
             ExtractedRecord.is_deleted == False,
-            ExtractedRecord.review_status.in_([ReviewStatus.APPROVED.value, ReviewStatus.MODIFIED.value]),
+            ExtractedRecord.review_status.in_([
+                ReviewStatus.APPROVED.value,
+                ReviewStatus.MODIFIED.value,
+                ReviewStatus.READ_CLEARLY.value,
+                "read_clearly",
+            ]),
         )
         if rack:
             plan_records_query = plan_records_query.where(
@@ -67,25 +72,40 @@ class ComparisonService:
         plan_records = db.execute(plan_records_query).scalars().all() if plan_doc_ids else []
 
         # 2. Fetch approved vendor records
-        vendor_docs_stmt = select(Document.id, Document.vendor_id).where(
-            Document.project_id == project_id,
-            Document.source == "vendor",
-        )
+        # Problem 15: For corrected vendor files, only select latest version of each file
+        vendor_docs = db.execute(
+            select(Document).where(
+                Document.project_id == project_id,
+                Document.source == "vendor",
+            )
+        ).scalars().all()
         if vendor_id:
-            vendor_docs_stmt = vendor_docs_stmt.where(Document.vendor_id == vendor_id)
+            vendor_docs = [d for d in vendor_docs if d.vendor_id == vendor_id]
 
-        vendor_doc_rows = db.execute(vendor_docs_stmt).all()
-        vendor_doc_ids = [r[0] for r in vendor_doc_rows]
-        doc_to_vendor = {r[0]: r[1] for r in vendor_doc_rows}
+        latest_docs_by_name: Dict[str, Document] = {}
+        for d in vendor_docs:
+            base_name = re.sub(r"_v\d+_", "_", d.filename.lower())
+            if base_name not in latest_docs_by_name or d.version > latest_docs_by_name[base_name].version:
+                latest_docs_by_name[base_name] = d
 
-        # Cache vendor names
+        active_vendor_docs = list(latest_docs_by_name.values())
+        vendor_doc_ids = [d.id for d in active_vendor_docs]
+        doc_to_vendor = {d.id: d.vendor_id for d in active_vendor_docs}
+
+        # Cache vendor names & vendor objects
         vendors_stmt = select(Vendor).where(Vendor.project_id == project_id)
-        vendor_names = {v.id: v.name for v in db.execute(vendors_stmt).scalars().all()}
+        project_vendors = db.execute(vendors_stmt).scalars().all()
+        vendor_names = {v.id: v.name for v in project_vendors}
 
         vendor_records_query = select(ExtractedRecord).where(
             ExtractedRecord.document_id.in_(vendor_doc_ids),
             ExtractedRecord.is_deleted == False,
-            ExtractedRecord.review_status.in_([ReviewStatus.APPROVED.value, ReviewStatus.MODIFIED.value]),
+            ExtractedRecord.review_status.in_([
+                ReviewStatus.APPROVED.value,
+                ReviewStatus.MODIFIED.value,
+                ReviewStatus.READ_CLEARLY.value,
+                "read_clearly",
+            ]),
         )
         if rack:
             vendor_records_query = vendor_records_query.where(
@@ -110,6 +130,8 @@ class ComparisonService:
                     "rack": r.rack or r.location,
                     "category": r.category,
                     "model": r.model,
+                    "vendor": r.vendor,
+                    "manufacturer": r.manufacturer,
                     "u_position": r.u_position,
                     "power_kw": r.power_kw,
                     "cable_type": r.cable_type,
@@ -126,6 +148,7 @@ class ComparisonService:
             rack_key = r.rack or r.location or "UNASSIGNED"
             key = (part_key.upper(), rack_key.upper())
 
+            # For serial lists: each line is one serial, so found = count of serials
             qty = r.quantity if r.quantity is not None else (1.0 if r.serial_number else 1.0)
             v_id = doc_to_vendor.get(r.document_id)
             v_name = vendor_names.get(v_id) if v_id else (r.vendor or "Unknown Vendor")
@@ -183,6 +206,28 @@ class ComparisonService:
             v_id = v_data.get("vendor_id") if v_data else None
             v_name = v_data.get("vendor_name") if v_data else None
 
+            # Issue 5: Missing items have no vendor -> assign vendor
+            if not v_id:
+                if vendor_id:
+                    v_id = vendor_id
+                    v_name = vendor_names.get(v_id)
+                elif len(project_vendors) == 1:
+                    v_id = project_vendors[0].id
+                    v_name = project_vendors[0].name
+                elif p_data and p_data.get("vendor"):
+                    pv = next((v for v in project_vendors if p_data["vendor"].lower() in v.name.lower()), None)
+                    if pv:
+                        v_id = pv.id
+                        v_name = pv.name
+                elif p_data and p_data.get("manufacturer"):
+                    pv = next((v for v in project_vendors if p_data["manufacturer"].lower() in v.name.lower()), None)
+                    if pv:
+                        v_id = pv.id
+                        v_name = pv.name
+                elif len(project_vendors) > 0:
+                    v_id = project_vendors[0].id
+                    v_name = project_vendors[0].name
+
             has_condition_failure = False
             cond_str = None
             notes_str = None
@@ -198,7 +243,7 @@ class ComparisonService:
             expected_src = p_data.get("source_ref") if p_data else None
             found_src = v_data.get("source_ref") if v_data else None
 
-            # Classification according to Problem 27 specifications:
+            # Classification according to business rules:
             if expected_qty > 0 and found_qty == 0:
                 status_code = ComparisonStatus.EXCEPTION
                 exceptions_count += 1
@@ -206,6 +251,10 @@ class ComparisonService:
                 details = f"Item planned ({expected_qty:.0f} units) but not delivered by vendor."
                 action = "Follow up with vendor for pending shipment."
                 rule_id = "RULE_MISSING_ITEM"
+                exp_num = expected_qty
+                fnd_num = None
+                exp_text = f"{expected_qty:.0f}" if expected_qty.is_integer() else f"{expected_qty}"
+                fnd_text = "Not delivered"
             elif expected_qty == 0 and found_qty > 0:
                 status_code = ComparisonStatus.EXCEPTION
                 exceptions_count += 1
@@ -213,11 +262,19 @@ class ComparisonService:
                 details = f"Unexpected item ({found_qty:.0f} units) delivered by vendor not in approved plan."
                 action = "Verify unauthorized delivery or check for substituted part number."
                 rule_id = "RULE_EXTRA_ITEM"
+                exp_num = None
+                fnd_num = found_qty
+                exp_text = "Not in plan"
+                fnd_text = f"{found_qty:.0f}" if found_qty.is_integer() else f"{found_qty}"
             elif diff != 0:
                 status_code = ComparisonStatus.EXCEPTION
                 exceptions_count += 1
                 cause = "Quantity different"
                 rule_id = "RULE_QTY_MISMATCH"
+                exp_num = expected_qty
+                fnd_num = found_qty
+                exp_text = f"{expected_qty:.0f}" if expected_qty.is_integer() else f"{expected_qty}"
+                fnd_text = f"{found_qty:.0f}" if found_qty.is_integer() else f"{found_qty}"
                 if diff < 0:
                     details = f"Shortage detected: expected {expected_qty:.0f}, found {found_qty:.0f} (short by {abs(diff):.0f})."
                     action = "Request expedited shortage delivery or vendor credit."
@@ -231,6 +288,10 @@ class ComparisonService:
                 details = f"Unit condition failed (DOA/Testing Failure: {notes_str or 'Defective'})."
                 action = "Initiate RMA return / quarantine defective unit."
                 rule_id = "RULE_CONDITION_FAILED"
+                exp_num = expected_qty
+                fnd_num = found_qty
+                exp_text = f"{expected_qty:.0f}" if expected_qty.is_integer() else f"{expected_qty}"
+                fnd_text = f"{found_qty:.0f}" if found_qty.is_integer() else f"{found_qty}"
             elif p_data and v_data and p_data.get("model") and v_data.get("model") and p_data["model"] != v_data["model"]:
                 status_code = ComparisonStatus.DISCREPANCY
                 discrepancies_count += 1
@@ -238,6 +299,10 @@ class ComparisonService:
                 details = f"Model mismatch: planned '{p_data['model']}', found '{v_data['model']}'."
                 action = "Review hardware model difference with engineering."
                 rule_id = "RULE_MODEL_MISMATCH"
+                exp_num = expected_qty
+                fnd_num = found_qty
+                exp_text = p_data["model"]
+                fnd_text = v_data["model"]
             elif p_data and v_data and p_data.get("u_position") and v_data.get("u_position") and p_data["u_position"] != v_data["u_position"]:
                 status_code = ComparisonStatus.DISCREPANCY
                 discrepancies_count += 1
@@ -245,6 +310,10 @@ class ComparisonService:
                 details = f"U-elevation mismatch: planned {p_data['u_position']}, delivered {v_data['u_position']}."
                 action = "Relocate equipment to designated rack / U slot."
                 rule_id = "RULE_LOCATION_MISMATCH"
+                exp_num = expected_qty
+                fnd_num = found_qty
+                exp_text = f"U{p_data['u_position']}"
+                fnd_text = f"U{v_data['u_position']}"
             else:
                 status_code = ComparisonStatus.MATCH
                 matches_count += 1
@@ -252,6 +321,10 @@ class ComparisonService:
                 details = "Delivered hardware matches engineering plan exactly with healthy condition."
                 action = "Accept / Verified for data center rack installation."
                 rule_id = "RULE_MATCH"
+                exp_num = expected_qty
+                fnd_num = found_qty
+                exp_text = f"{expected_qty:.0f}" if expected_qty.is_integer() else f"{expected_qty}"
+                fnd_text = f"{found_qty:.0f}" if found_qty.is_integer() else f"{found_qty}"
 
             raw_items.append({
                 "part_number": part_display,
@@ -262,8 +335,10 @@ class ComparisonService:
                 "vendor_name": v_name,
                 "category": cat_display,
                 "item": desc_display or part_display,
-                "expected": expected_qty,
-                "found": found_qty,
+                "expected": exp_num,
+                "found": fnd_num,
+                "expected_text": exp_text,
+                "found_text": fnd_text,
                 "difference": diff,
                 "status": status_code,
                 "cause": cause,
@@ -364,6 +439,8 @@ class ComparisonService:
                     field="quantity" if it["rule_id"] == "RULE_QTY_MISMATCH" else "hardware",
                     expected=it["expected"],
                     found=it["found"],
+                    expected_text=it.get("expected_text"),
+                    found_text=it.get("found_text"),
                     difference=it["difference"],
                     result=it["status"].value.lower(),
                     action=it["action"],
@@ -380,6 +457,25 @@ class ComparisonService:
 
             db.commit()
 
+            # Record audit log for comparison run
+            try:
+                from app.api.audit import record_audit_log
+                record_audit_log(
+                    db=db,
+                    action="compare",
+                    resource_type="project",
+                    resource_id=project_id,
+                    project_id=project_id,
+                    details={
+                        "run_id": run_id,
+                        "matches_count": matches_count,
+                        "discrepancies_count": discrepancies_count,
+                        "exceptions_count": exceptions_count,
+                    },
+                )
+            except Exception:
+                pass
+
         # Build ComparisonItem objects
         items: List[ComparisonItem] = [
             ComparisonItem(
@@ -392,6 +488,8 @@ class ComparisonService:
                 category=it["category"],
                 expected_quantity=it["expected"],
                 found_quantity=it["found"],
+                expected_text=it.get("expected_text"),
+                found_text=it.get("found_text"),
                 difference=it["difference"],
                 status=it["status"],
                 condition_status=it["condition_status"],
@@ -443,6 +541,13 @@ class ComparisonService:
         page_size: int = 50,
     ) -> ComparisonResultsListResponse:
         """Fetch granular comparison result lines for a project with filters and pagination."""
+        project = db.get(Project, project_id)
+        if not project or project.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Project '{project_id}' not found.",
+            )
+
         query = select(ComparisonResultItem).where(ComparisonResultItem.project_id == project_id)
 
         if result:
@@ -490,6 +595,13 @@ class ComparisonService:
         run_id: Optional[str] = None,
     ) -> IssueGroupListResponse:
         """Retrieve issue groups summarizing common discrepancies and exceptions."""
+        project = db.get(Project, project_id)
+        if not project or project.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Project '{project_id}' not found.",
+            )
+
         query = select(IssueGroup).where(IssueGroup.project_id == project_id)
         if run_id:
             query = query.where(IssueGroup.run_id == run_id)
@@ -502,6 +614,13 @@ class ComparisonService:
     @staticmethod
     def get_runs(db: Session, project_id: str) -> ComparisonRunListResponse:
         """Retrieve comparison runs history for a project."""
+        project = db.get(Project, project_id)
+        if not project or project.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Project '{project_id}' not found.",
+            )
+
         query = select(ComparisonRun).where(ComparisonRun.project_id == project_id).order_by(ComparisonRun.run_number.desc())
         runs = db.execute(query).scalars().all()
         return ComparisonRunListResponse(

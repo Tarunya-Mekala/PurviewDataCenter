@@ -12,6 +12,7 @@ from app.schemas.record import (
     ExtractedRecordResponse,
     ExtractedRecordReview,
     ExtractedRecordUpdate,
+    RecordEvidenceResponse,
     RecordListResponse,
     RecordReviewActionResponse,
     RecordType,
@@ -189,6 +190,7 @@ def batch_review_records(
 
 @router.get(
     "/records/{record_id}/evidence",
+    response_model=RecordEvidenceResponse,
     summary="Get cell or bounding-box coordinate evidence for a record",
     description="Retrieve the exact source sheet, row, and column highlighting or image coordinate bounding box for a value.",
 )

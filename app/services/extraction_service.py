@@ -1,4 +1,5 @@
 import csv
+import random
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,13 +48,16 @@ def col_num_to_letter(col_idx: int) -> str:
 
 
 def parse_quantity_strict(val: Any) -> Optional[float]:
-    """Safely convert quantity to float if present; return None if empty/null/missing."""
+    """Safely convert quantity to float if present; return None if empty/null/missing or date."""
     if val is None:
         return None
     if isinstance(val, (int, float)):
         return float(val)
     s = str(val).strip()
     if not s:
+        return None
+    # Never map dates (e.g. 25.05.26, 2026-05-25, 25/05/2026) to quantity
+    if re.search(r"^\d{1,4}[./-]\d{1,2}[./-]\d{1,4}", s):
         return None
     match = re.search(r"[-+]?\d*\.?\d+", s)
     if match:
@@ -162,10 +166,15 @@ class ExtractionService:
             record_data["rack"] = record_data.get("location")
 
         # 4. Strict quantity parsing (NEVER default to 1.0)
-        raw_qty = record_data.get("quantity")
-        record_data["quantity"] = parse_quantity_strict(raw_qty) if raw_qty else None
-        if not record_data.get("quantity"):
+        # Issue 4: Never map date columns to quantity; serial rows have quantity null
+        if record_data.get("serial_number"):
+            record_data["quantity"] = None
             record_data["unit"] = None
+        else:
+            raw_qty = record_data.get("quantity")
+            record_data["quantity"] = parse_quantity_strict(raw_qty) if raw_qty else None
+            if not record_data.get("quantity"):
+                record_data["unit"] = None
 
         # 5. Detect condition and notes from DOA/test columns
         cond, cond_notes = detect_condition(record_data["raw_data"])
@@ -206,11 +215,14 @@ class ExtractionService:
         reasons = []
         if record_data.get("part_number") is None:
             reasons.append("missing_value")
-        elif record_data.get("quantity") is None:
+        elif record_data.get("quantity") is None and not record_data.get("serial_number"):
             reasons.append("missing_value")
 
         if record_data["unmapped_columns"]:
             reasons.append("unmapped_field")
+
+        if str(record_data.get("condition") or "").lower() in ["failed", "doa", "damaged"]:
+            reasons.append("condition_failure")
 
         if col_confidence and any(conf < 0.9 for conf in col_confidence.values()):
             reasons.append("unclear_match")
@@ -218,13 +230,10 @@ class ExtractionService:
         record_data["review_reason"] = reasons[0] if reasons else None
 
         # 9. Compute fine-grained confidence score (0.0 to 1.0)
-        # Scale: 1.0 start; -0.3 if part_number missing; -0.2 if quantity missing;
-        # -0.15 per non-empty unmapped value; -0.1 if loose match;
-        # -0.2 if part_number has irregular format
         score = 1.0
         if not record_data.get("part_number"):
             score -= 0.30
-        if record_data.get("quantity") is None:
+        if record_data.get("quantity") is None and not record_data.get("serial_number"):
             score -= 0.20
         if record_data["unmapped_columns"]:
             score -= min(0.30, len(record_data["unmapped_columns"]) * 0.15)
@@ -309,15 +318,125 @@ class ExtractionService:
         return records, skipped_sheets
 
     @staticmethod
+    def _extract_serial_matrix(sheet: Any, sheet_name: str) -> List[Dict[str, Any]]:
+        """
+        Detect and parse multi-column serial matrix sheets (e.g. MPO Serial Numbers.xlsx).
+        The part number is the column heading (row 2); creates one line per serial with
+        part_number = that column's part number and serial_number = the cell.
+        """
+        pn_blocks = []
+        max_r = min(getattr(sheet, "max_row", 20) or 20, 10)
+        max_c = getattr(sheet, "max_column", 40) or 40
+
+        for r in range(1, max_r + 1):
+            for c in range(1, max_c + 1):
+                v = sheet.cell(r, c).value
+                if v and "part number" in str(v).lower():
+                    pn_val = None
+                    for c2 in range(c + 1, min(max_c + 1, c + 5)):
+                        v2 = sheet.cell(r, c2).value
+                        if v2 and str(v2).strip():
+                            pn_val = str(v2).strip()
+                            break
+                    if pn_val:
+                        pn_blocks.append((r, c, pn_val))
+
+        if not pn_blocks:
+            return []
+
+        matrix_records = []
+        total_r = getattr(sheet, "max_row", 1200) or 1200
+        for r_pn, c_pn, pn in pn_blocks:
+            clean_pn = clean_part_number(pn)
+            s_col = c_pn
+            s_row = r_pn + 2
+            desc = None
+
+            for r_scan in range(r_pn + 1, min(total_r + 1, r_pn + 8)):
+                for c_scan in range(max(1, c_pn - 2), min(max_c + 1, c_pn + 5)):
+                    cv = sheet.cell(r_scan, c_scan).value
+                    if cv:
+                        cv_str = str(cv).strip()
+                        if "serial" in cv_str.lower():
+                            s_col = c_scan
+                            s_row = r_scan + 1
+                        elif len(cv_str) > 20 and not desc:
+                            desc = cv_str
+
+            col_letter = col_num_to_letter(s_col - 1)
+            for r in range(s_row, total_r + 1):
+                cell_val = sheet.cell(r, s_col).value
+                if cell_val is not None:
+                    val_str = str(cell_val).strip()
+                    if (
+                        val_str
+                        and "serial" not in val_str.lower()
+                        and "part" not in val_str.lower()
+                        and "product" not in val_str.lower()
+                    ):
+                        matrix_records.append({
+                            "source_sheet": sheet_name,
+                            "source_row": r,
+                            "category": "cable",
+                            "record_type": "cable_item",
+                            "part_number": pn,
+                            "cleaned_part_number": clean_pn,
+                            "model": clean_pn,
+                            "serial_number": val_str,
+                            "quantity": None,
+                            "unit": None,
+                            "description": desc,
+                            "confidence_score": 0.95,
+                            "review_reason": None,
+                            "raw_data": {
+                                "part_number": pn,
+                                "serial_number": val_str,
+                                "description": desc or "",
+                            },
+                            "unmapped_columns": [],
+                            "field_sources": {
+                                "part_number": {
+                                    "sheet": sheet_name,
+                                    "row": r_pn,
+                                    "col": col_num_to_letter(c_pn - 1),
+                                },
+                                "serial_number": {
+                                    "sheet": sheet_name,
+                                    "row": r,
+                                    "col": col_letter,
+                                },
+                            },
+                            "original_values": {
+                                "part_number": pn,
+                                "cleaned_part_number": clean_pn,
+                                "model": clean_pn,
+                                "serial_number": val_str,
+                                "quantity": None,
+                                "description": desc,
+                                "category": "cable",
+                            },
+                            "auto_clear": True,
+                        })
+
+        return matrix_records
+
+    @staticmethod
     def _extract_from_excel(file_path: Path) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
         """Parse Excel workbooks across all sheets using openpyxl with sheet skipping."""
         records = []
         skipped_sheets = []
         try:
             import openpyxl
-            wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+            wb = openpyxl.load_workbook(file_path, data_only=True)
             for sheet_name in wb.sheetnames:
                 sheet = wb[sheet_name]
+
+                # Problem 2 fix: Detect multi-column serial matrix sheets first
+                matrix_recs = ExtractionService._extract_serial_matrix(sheet, sheet_name)
+                if matrix_recs:
+                    records.extend(matrix_recs)
+                    continue
+
                 rows_iter = sheet.iter_rows(values_only=True)
                 headers = None
                 for row in rows_iter:
@@ -565,6 +684,16 @@ class ExtractionService:
         db.commit()
 
         ext = file_path.suffix.lower()
+        if ext in [".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg"]:
+            from app.ai.llm import ollama_client
+            if ollama_client.is_available():
+                return ExtractionService.extract_document_with_ai(
+                    db=db,
+                    document_id=document_id,
+                    model=model,
+                    allow_fallback=True,
+                )
+
         extracted_data: List[Dict[str, Any]] = []
         skipped_sheets: List[Dict[str, str]] = []
 
@@ -577,6 +706,16 @@ class ExtractionService:
                 extracted_data, skipped_sheets = ExtractionService._extract_from_pdf(file_path)
             else:
                 extracted_data, skipped_sheets = ExtractionService._extract_from_csv(file_path)
+
+            if len(extracted_data) == 0:
+                from app.ai.llm import ollama_client
+                if ollama_client.is_available():
+                    return ExtractionService.extract_document_with_ai(
+                        db=db,
+                        document_id=document_id,
+                        model=model,
+                        allow_fallback=True,
+                    )
 
             # Store skipped sheets in document metadata
             doc_meta = dict(doc.metadata_json or {})
@@ -681,11 +820,38 @@ class ExtractionService:
                         match.unmapped_columns = item.get("unmapped_columns", [])
                 else:
                     # New record
+                    # Issue 1: Lines that pass every check get review_status "read_clearly" (or approved by "system")
+                    is_serial = bool(item.get("serial_number"))
+                    has_pn = bool(item.get("part_number") or item.get("cleaned_part_number"))
+                    has_qty = is_serial or (item.get("quantity") is not None and isinstance(item.get("quantity"), (int, float)))
+                    all_mapped = len(item.get("unmapped_columns") or []) == 0
+                    cond = str(item.get("condition") or "").lower()
+                    no_conflict = cond not in ["failed", "doa", "damaged", "fail", "broken"]
+                    high_score = (item.get("confidence_score") or 0.0) >= 0.85
+
+                    passes_all = (has_pn and has_qty and all_mapped and no_conflict and high_score) or item.get("auto_clear", False)
+                    if passes_all:
+                        if random.random() < 0.05:
+                            status_val = ReviewStatus.PENDING_REVIEW.value
+                            reason_val = "Random 5% quality spot check"
+                            rev_by = None
+                            rev_at = None
+                        else:
+                            status_val = "read_clearly"
+                            reason_val = None
+                            rev_by = "system"
+                            rev_at = datetime.now(timezone.utc)
+                    else:
+                        status_val = ReviewStatus.PENDING_REVIEW.value
+                        reason_val = item.get("review_reason") or "Requires manual review"
+                        rev_by = None
+                        rev_at = None
+
                     rec = ExtractedRecord(
                         id=generate_id("rec"),
                         project_id=doc.project_id,
                         document_id=doc.id,
-                        record_type=default_record_type,
+                        record_type=item.get("record_type", default_record_type),
                         category=item.get("category"),
                         part_number=item.get("part_number"),
                         cleaned_part_number=item.get("cleaned_part_number"),
@@ -711,14 +877,16 @@ class ExtractionService:
                         confidence_score=item.get("confidence_score", 0.80),
                         raw_data=item.get("raw_data"),
                         unmapped_columns=item.get("unmapped_columns", []),
-                        review_reason=item.get("review_reason"),
+                        review_reason=reason_val,
                         original_values=item.get("original_values"),
-                        extraction_method="table",
-                        model_used=None,
+                        extraction_method=item.get("extraction_method", "table"),
+                        model_used=item.get("model_used"),
                         source_sheet=item.get("source_sheet"),
                         source_row=item.get("source_row"),
                         field_sources=item.get("field_sources"),
-                        review_status=ReviewStatus.PENDING_REVIEW.value,
+                        review_status=status_val,
+                        reviewed_by=rev_by,
+                        reviewed_at=rev_at,
                         is_manually_added=False,
                         is_deleted=False,
                     )
@@ -732,6 +900,23 @@ class ExtractionService:
             doc.status = DocumentStatus.EXTRACTED.value
             doc.error_message = None
             db.commit()
+
+            # Record audit log for extraction
+            try:
+                from app.api.audit import record_audit_log
+                record_audit_log(
+                    db=db,
+                    action="extract",
+                    resource_type="document",
+                    resource_id=doc.id,
+                    project_id=doc.project_id,
+                    details={
+                        "filename": doc.filename,
+                        "records_extracted": len(extracted_data),
+                    },
+                )
+            except Exception:
+                pass
 
             return ExtractionJobResponse(
                 document_id=doc.id,
@@ -826,6 +1011,20 @@ class ExtractionService:
                     "location": item.get("location"),
                 }
 
+                # Auto-assign review status: read_clearly if clean, 5% random spot check to pending_review
+                score = float(item.get("confidence_score") or 0.90)
+                is_clean = bool(pn and (qty is not None or item.get("serial_number")) and score >= 0.85)
+                if is_clean and random.random() >= 0.05:
+                    status_val = "read_clearly"
+                    reason_val = None
+                    rev_by = "system"
+                    rev_at = datetime.now(timezone.utc)
+                else:
+                    status_val = ReviewStatus.PENDING_REVIEW.value
+                    reason_val = "Random 5% quality spot check" if is_clean else "Review required"
+                    rev_by = None
+                    rev_at = None
+
                 rec = ExtractedRecord(
                     id=generate_id("rec"),
                     project_id=doc.project_id,
@@ -846,13 +1045,16 @@ class ExtractionService:
                     target_device=item.get("target_device"),
                     target_port=item.get("target_port"),
                     cable_type=item.get("cable_type"),
-                    confidence_score=item.get("confidence_score", 0.90),
+                    confidence_score=score,
                     raw_data=item.get("raw_data"),
                     original_values=orig_dict,
                     extraction_method="ai",
                     model_used=target_model,
                     source_sheet="AI_Extracted",
-                    review_status=ReviewStatus.PENDING_REVIEW.value,
+                    review_status=status_val,
+                    review_reason=reason_val,
+                    reviewed_by=rev_by,
+                    reviewed_at=rev_at,
                     is_manually_added=False,
                     is_deleted=False,
                 )
@@ -861,6 +1063,25 @@ class ExtractionService:
             doc.status = DocumentStatus.EXTRACTED.value
             doc.error_message = None
             db.commit()
+
+            # Record audit log for AI extraction
+            try:
+                from app.api.audit import record_audit_log
+                record_audit_log(
+                    db=db,
+                    action="extract",
+                    resource_type="document",
+                    resource_id=doc.id,
+                    project_id=doc.project_id,
+                    details={
+                        "filename": doc.filename,
+                        "records_extracted": len(ai_records),
+                        "extraction_method": "ai",
+                        "model_used": target_model,
+                    },
+                )
+            except Exception:
+                pass
 
             return ExtractionJobResponse(
                 document_id=doc.id,
@@ -1182,6 +1403,15 @@ class ExtractionService:
         updated_count = 0
         skipped: List[Dict[str, str]] = []
 
+        found_map = {r.id: r for r in records}
+        # Issue 9: List every skipped ID with its reason if not in found records
+        for rec_id in request.record_ids:
+            if rec_id not in found_map:
+                skipped.append({
+                    "id": rec_id,
+                    "reason": "Record ID not found in project or is already deleted",
+                })
+
         for r in records:
             if request.action == BatchReviewAction.APPROVE and request.min_confidence is not None:
                 if r.confidence_score < request.min_confidence:
@@ -1225,6 +1455,26 @@ class ExtractionService:
             updated_count += 1
 
         db.commit()
+
+        # Audit log for batch review
+        try:
+            from app.api.audit import record_audit_log
+            record_audit_log(
+                db=db,
+                action="review",
+                resource_type="record",
+                project_id=project_id,
+                details={
+                    "batch": True,
+                    "action": request.action.value,
+                    "updated_count": updated_count,
+                    "skipped_count": len(skipped),
+                    "skipped": skipped,
+                },
+            )
+        except Exception:
+            pass
+
         return updated_count, skipped
 
     @staticmethod
@@ -1463,7 +1713,14 @@ class ExtractionService:
 
     @staticmethod
     def get_review_summary(db: Session, project_id: str) -> ReviewSummaryResponse:
-        """Problem 21: Compute review summary, grouping by_vendor by supplier and by_manufacturer by brand."""
+        """Problem 21 & Issue 12: Compute review summary; return 404 for deleted or non-existent projects."""
+        project = db.get(Project, project_id)
+        if not project or project.is_deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Project '{project_id}' not found.",
+            )
+
         from app.models.vendor import Vendor
         records = db.execute(
             select(ExtractedRecord).where(

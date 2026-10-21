@@ -63,13 +63,13 @@ def get_file_extension(filename: str) -> str:
 def validate_file_extension(filename: str) -> str:
     """
     Validate that the file extension is allowed.
-    Raises HTTPException(400) if not supported.
+    Raises HTTPException(415) if not supported.
     """
     ext = get_file_extension(filename)
     if not ext or ext not in ALLOWED_EXTENSIONS:
         allowed_list = ", ".join(sorted(ALLOWED_EXTENSIONS))
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported file type '{ext}'. Allowed types: {allowed_list}",
         )
     return ext
