@@ -20,10 +20,18 @@ async def lifespan(app: FastAPI):
     ]:
         Path(directory).mkdir(parents=True, exist_ok=True)
 
-    # Create tables if they do not exist
+    # Apply database migrations via Alembic automatically on startup
+    try:
+        from alembic.config import Config
+        from alembic import command
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
+    except Exception as e:
+        print(f"Alembic startup migration note: {e}")
+
+    # Create tables and seed initial Super Admin
     try:
         Base.metadata.create_all(bind=engine)
-        # Seed initial Super Admin if not present
         from app.core.database import SessionLocal
         from app.core.security import init_super_admin
         with SessionLocal() as db:
@@ -34,12 +42,18 @@ async def lifespan(app: FastAPI):
     yield
 
 
+from fastapi.openapi.docs import (
+    get_swagger_ui_html,
+    get_swagger_ui_oauth2_redirect_html,
+)
+from fastapi.responses import HTMLResponse
+
 app = FastAPI(
     title=settings.APP_NAME,
     description="AI-powered document extraction and BOM reconciliation system.",
     version="1.0.0",
     lifespan=lifespan,
-    docs_url="/docs",
+    docs_url=None,
     redoc_url="/redoc",
 )
 
@@ -109,6 +123,141 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
+
+SWAGGER_EYE_TOGGLE_SNIPPET = """
+<style>
+  .pwd-toggle-wrapper {
+    position: relative !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    vertical-align: middle !important;
+    width: fit-content !important;
+    max-width: 100% !important;
+    margin: 5px 0 !important;
+    box-sizing: border-box !important;
+  }
+  .pwd-toggle-wrapper input {
+    margin: 0 !important;
+    padding-right: 34px !important;
+    box-sizing: border-box !important;
+  }
+  .pwd-toggle-btn {
+    position: absolute !important;
+    right: 8px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 2px !important;
+    cursor: pointer !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: #555e69 !important;
+    opacity: 0.75 !important;
+    transition: opacity 0.2s ease, color 0.2s ease !important;
+    z-index: 10 !important;
+    line-height: 1 !important;
+  }
+  .pwd-toggle-btn:hover {
+    opacity: 1 !important;
+    color: #111827 !important;
+  }
+  .pwd-toggle-btn svg {
+    width: 18px !important;
+    height: 18px !important;
+    pointer-events: none !important;
+  }
+</style>
+<script>
+  (function() {
+    var eyeOpenSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
+    var eyeClosedSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
+
+    function attachEyeToggle(input) {
+      if (!input || input.getAttribute('data-has-eye-toggle')) return;
+      input.setAttribute('data-has-eye-toggle', 'true');
+
+      var parent = input.parentElement;
+      if (!parent) return;
+
+      var wrapper;
+      if (parent.classList.contains('pwd-toggle-wrapper')) {
+        wrapper = parent;
+      } else {
+        wrapper = document.createElement('div');
+        wrapper.className = 'pwd-toggle-wrapper';
+        if (input.style.width) wrapper.style.width = input.style.width;
+        parent.insertBefore(wrapper, input);
+        wrapper.appendChild(input);
+      }
+
+      input.style.paddingRight = '34px';
+
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pwd-toggle-btn';
+      btn.title = 'Show password';
+      btn.setAttribute('aria-label', 'Toggle password visibility');
+      btn.innerHTML = eyeOpenSvg;
+
+      btn.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (input.type === 'password') {
+          input.type = 'text';
+          btn.innerHTML = eyeClosedSvg;
+          btn.title = 'Hide password';
+        } else {
+          input.type = 'password';
+          btn.innerHTML = eyeOpenSvg;
+          btn.title = 'Show password';
+        }
+      });
+
+      wrapper.appendChild(btn);
+    }
+
+    function scanInputs() {
+      // Find all password inputs in Swagger UI (including Authorize modal & Try-it-out forms)
+      var selector = 'input[type="password"], input[name="password"], input[name="client_secret"], input[data-name="password"], input[data-name="client_secret"]';
+      var inputs = document.querySelectorAll(selector);
+      for (var i = 0; i < inputs.length; i++) {
+        attachEyeToggle(inputs[i]);
+      }
+    }
+
+    var observer = new MutationObserver(function() {
+      scanInputs();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    setInterval(scanInputs, 400);
+    scanInputs();
+  })();
+</script>
+"""
+
+
+@app.get("/docs", include_in_schema=False)
+def custom_swagger_ui_html():
+    base_response = get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=app.title + " - API Documentation",
+        oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
+        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+        swagger_ui_parameters={"persistAuthorization": True},
+    )
+    content = base_response.body.decode("utf-8").replace("</body>", f"{SWAGGER_EYE_TOGGLE_SNIPPET}</body>")
+    headers = dict(base_response.headers)
+    headers.pop("content-length", None)
+    return HTMLResponse(content=content, status_code=base_response.status_code, headers=headers)
+
+
+@app.get(app.swagger_ui_oauth2_redirect_url, include_in_schema=False)
+def swagger_ui_redirect():
+    return get_swagger_ui_oauth2_redirect_html()
 
 
 @app.get("/", tags=["Health"])

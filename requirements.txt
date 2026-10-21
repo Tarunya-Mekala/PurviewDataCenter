@@ -31,8 +31,6 @@ PyMuPDF
 pdfplumber
 python-docx
 Pillow
-pytesseract
-opencv-python-headless
 
 # -------------------------
 # LangChain
@@ -40,12 +38,7 @@ opencv-python-headless
 langchain
 langchain-core
 langchain-community
-
-# -------------------------
-# LLM
-# -------------------------
-openai
-httpx
+langchain-ollama
 
 # -------------------------
 # Testing

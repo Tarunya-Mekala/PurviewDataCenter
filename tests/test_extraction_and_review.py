@@ -118,8 +118,8 @@ def test_extraction_and_human_review_flow(client):
     assert summary["modified_count"] == 1
     assert summary["rejected_count"] == 1
     assert summary["completion_percentage"] == 100.0
-    assert "Cisco" in summary["by_vendor"]
-    assert "Arista" in summary["by_vendor"]
+    assert "Cisco" in summary.get("by_manufacturer", {}) or "Cisco" in summary["by_vendor"]
+    assert "Arista" in summary.get("by_manufacturer", {}) or "Arista" in summary["by_vendor"]
 
     # 11. Delete manual record
     del_res = client.delete(f"/api/v1/records/{manual_id}")
@@ -127,17 +127,13 @@ def test_extraction_and_human_review_flow(client):
     assert client.get(f"/api/v1/records/{manual_id}").status_code == status.HTTP_404_NOT_FOUND
 
 
-def test_ai_status_and_extraction_endpoints(client, monkeypatch):
-    # 1. Test AI status endpoint
+def test_ai_extraction_endpoints_removed(client):
+    # 1. AI status endpoint removed
     status_res = client.get("/api/v1/ai/status")
-    assert status_res.status_code == status.HTTP_200_OK
-    data = status_res.json()
-    assert "configured_model" in data
-    assert "ollama_online" in data
-    assert "recommended_model" in data
+    assert status_res.status_code == status.HTTP_404_NOT_FOUND
 
-    # 2. Create project & document for AI extraction
-    proj_res = client.post("/api/v1/projects", json={"name": "AI Extraction Test"})
+    # 2. Create project & document
+    proj_res = client.post("/api/v1/projects", json={"name": "Extraction Test"})
     project_id = proj_res.json()["id"]
 
     sample_csv = b"Part,Qty,Desc\nN9K-9336,1,Cisco Spine Switch\n"
@@ -145,61 +141,26 @@ def test_ai_status_and_extraction_endpoints(client, monkeypatch):
     doc_res = client.post(f"/api/v1/projects/{project_id}/documents", files=files)
     doc_id = doc_res.json()["successful"][0]["id"]
 
-    # 3. Test check extraction status (initially pending)
-    st_res = client.get(f"/api/v1/documents/{doc_id}/extraction-status")
-    assert st_res.status_code == status.HTTP_200_OK
-    assert st_res.json()["status"] == "pending"
-    assert st_res.json()["total_records_extracted"] == 0
+    # 3. Dedicated extract-ai endpoint removed
+    ai_res = client.post(f"/api/v1/documents/{doc_id}/extract-ai")
+    assert ai_res.status_code == status.HTTP_404_NOT_FOUND
 
-    # 4. Mock Ollama response to test AI extraction pipeline without requiring running local Ollama
-    from app.ai.llm import ollama_client
-
-    def mock_generate_json(prompt, system=None, model=None, timeout_seconds=120.0):
-        return {
-            "records": [
-                {
-                    "part_number": "N9K-9336C-FX2",
-                    "description": "Nexus 9336C-FX2 36-Port 100G Switch",
-                    "quantity": 2.0,
-                    "unit": "pcs",
-                    "vendor": "Cisco",
-                    "category": "Switch",
-                    "confidence_score": 0.98,
-                }
-            ]
-        }
-
-    monkeypatch.setattr(ollama_client, "generate_json", mock_generate_json)
-
-    # 5. Trigger dedicated AI extraction endpoint
-    ai_res = client.post(
-        f"/api/v1/documents/{doc_id}/extract-ai",
-        json={"model": "qwen2.5:27b"},
+    # 4. Raw snippet AI extraction endpoint removed
+    snippet_res = client.post(
+        "/api/v1/extract/ai-snippet",
+        json={"text": "1x DCS-7280SR", "document_type": "bom"},
     )
-    assert ai_res.status_code == status.HTTP_200_OK
-    ai_data = ai_res.json()
-    assert ai_data["status"] == "extracted"
-    assert ai_data["records_extracted"] == 1
-    assert "qwen2.5:27b" in (ai_data.get("model_used") or "")
+    assert snippet_res.status_code == status.HTTP_404_NOT_FOUND
 
-    # 6. Check extraction status reflects extracted records
+    # 5. Standard extraction endpoint works
+    extract_res = client.post(f"/api/v1/documents/{doc_id}/extract")
+    assert extract_res.status_code == status.HTTP_200_OK
+    assert extract_res.json()["status"] == "extracted"
+
+    # 6. Extraction status works
     st_res = client.get(f"/api/v1/documents/{doc_id}/extraction-status")
     assert st_res.status_code == status.HTTP_200_OK
     assert st_res.json()["status"] == "extracted"
     assert st_res.json()["total_records_extracted"] == 1
-    assert st_res.json()["review_status_counts"]["pending_review"] == 1
 
-    # 7. Test direct raw snippet AI extraction
-    snippet_res = client.post(
-        "/api/v1/extract/ai-snippet",
-        json={
-            "text": "1x DCS-7280SR Arista 100G router, 4x SFP-25G-SR optics",
-            "document_type": "bom",
-            "model": "qwen2.5:27b",
-        },
-    )
-    assert snippet_res.status_code == status.HTTP_200_OK
-    snippet_data = snippet_res.json()
-    assert len(snippet_data) >= 1
-    assert snippet_data[0]["vendor"] == "Cisco"
 

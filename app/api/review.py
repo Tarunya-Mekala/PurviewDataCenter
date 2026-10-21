@@ -13,6 +13,7 @@ from app.schemas.record import (
     ExtractedRecordReview,
     ExtractedRecordUpdate,
     RecordListResponse,
+    RecordReviewActionResponse,
     RecordType,
     ReviewStatus,
     ReviewSummaryResponse,
@@ -170,7 +171,7 @@ def batch_review_records(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_super_admin),
 ):
-    updated_count = ExtractionService.batch_review(
+    updated_count, skipped = ExtractionService.batch_review(
         db=db,
         project_id=project_id,
         request=request,
@@ -181,7 +182,23 @@ def batch_review_records(
         "action": request.action.value,
         "records_reviewed": updated_count,
         "status": "success",
+        "updated": updated_count,
+        "skipped": skipped,
     }
+
+
+@router.get(
+    "/records/{record_id}/evidence",
+    summary="Get cell or bounding-box coordinate evidence for a record",
+    description="Retrieve the exact source sheet, row, and column highlighting or image coordinate bounding box for a value.",
+)
+def get_record_evidence(
+    record_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_super_admin),
+):
+    return ExtractionService.get_record_evidence(db=db, record_id=record_id)
+
 
 
 @router.post(
@@ -206,19 +223,57 @@ def add_manual_record(
     return ExtractedRecordResponse.model_validate(rec)
 
 
+@router.get(
+    "/records/{record_id}/history",
+    response_model=List[RecordReviewActionResponse],
+    summary="Get record review and audit history",
+    description="Retrieve chronological list of all modifications, reviews, and corrections for a record.",
+)
+def get_record_history(
+    record_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_super_admin),
+):
+    actions = ExtractionService.get_record_history(db, record_id)
+    return [RecordReviewActionResponse.model_validate(a) for a in actions]
+
+
 @router.delete(
     "/records/{record_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete an extracted record",
-    description="Remove an invalid or duplicated record from the project review set.",
+    description="Remove an invalid or duplicated record from the project review set (soft delete with audit).",
 )
 def delete_record(
     record_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_super_admin),
 ):
-    ExtractionService.delete_record(db, record_id)
+    ExtractionService.delete_record(db, record_id, reviewer_email=current_user.email)
     return None
+
+
+@router.post(
+    "/records/{record_id}/undo",
+    response_model=ExtractedRecordResponse,
+    summary="Undo record edits",
+    description="Revert record back to original extracted values and reset review status to pending_review.",
+)
+def undo_record(
+    record_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_super_admin),
+):
+    rec = ExtractionService.review_record(
+        db=db,
+        record_id=record_id,
+        review_data=ExtractedRecordReview(
+            status="pending_review",
+            review_notes="Reverted edits to original extracted values",
+        ),
+        reviewer_email=current_user.email,
+    )
+    return ExtractedRecordResponse.model_validate(rec)
 
 
 # ---------------------------------------------------------

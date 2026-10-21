@@ -1,191 +1,73 @@
-from __future__ import annotations
+BOM_EXTRACTION_PROMPT = """You are an expert AI Data Center Infrastructure and Hardware Engineer specializing in Bill of Materials (BOM) extraction.
+Analyze the following document text and extract all hardware line items into structured JSON.
 
+For each item, identify:
+- part_number: The manufacturer part number, model, or order code (e.g. "N9K-C93180YC-FX", "DCS-7050TX3-48C8", "PowerEdge R750").
+- description: Full product description and specifications.
+- quantity: Numeric quantity (float/integer). Defaults to 1.0 if not specified.
+- unit: Unit of measure (e.g. "pcs", "meters", "ft", "spool"). Defaults to "pcs".
+- vendor: Manufacturer or vendor brand (e.g. "Cisco", "Arista", "Dell", "Schneider", "Panduit", "APC").
+- category: Hardware category (e.g. "Switch", "Router", "Server", "Transceiver", "PDU", "Cable", "Optics", "Patch Panel").
+- location: Physical location, cabinet, or rack elevation if specified.
+- confidence_score: Confidence in extraction between 0.0 and 1.0.
 
-CANONICAL_FIELDS = [
-    "equipment_name",
-    "part_number",
-    "description",
-    "model",
-    "manufacturer",
-    "vendor",
-    "quantity",
-    "unit",
-    "rack_id",
-    "u_position",
-    "source_device",
-    "source_port",
-    "target_device",
-    "target_port",
-    "cable_type",
-    "length",
-    "power_watts",
-    "dimensions",
-]
-
-
-CATEGORY_EXTRACTION_GUIDANCE = {
-
-    "bom": {
-        "purpose": (
-            "Equipment and material baseline/inventory."
-        ),
-        "fields": [
-            "equipment_name",
-            "part_number",
-            "description",
-            "model",
-            "manufacturer",
-            "vendor",
-            "quantity",
-            "unit",
-        ],
-    },
-
-    "p2p": {
-        "purpose": (
-            "Point-to-point connectivity between "
-            "devices and ports."
-        ),
-        "fields": [
-            "source_device",
-            "source_port",
-            "target_device",
-            "target_port",
-            "cable_type",
-            "length",
-            "part_number",
-            "quantity",
-        ],
-    },
-
-    "rack": {
-        "purpose": (
-            "Physical rack and equipment placement."
-        ),
-        "fields": [
-            "rack_id",
-            "u_position",
-            "equipment_name",
-            "part_number",
-            "model",
-            "manufacturer",
-            "quantity",
-            "dimensions",
-        ],
-    },
-
-    "rack_layout": {
-        "purpose": (
-            "Physical rack layout and equipment "
-            "placement."
-        ),
-        "fields": [
-            "rack_id",
-            "u_position",
-            "equipment_name",
-            "part_number",
-            "model",
-            "manufacturer",
-            "quantity",
-            "dimensions",
-        ],
-    },
-
-    "power": {
-        "purpose": (
-            "Power equipment, consumption and "
-            "distribution information."
-        ),
-        "fields": [
-            "equipment_name",
-            "part_number",
-            "model",
-            "manufacturer",
-            "vendor",
-            "quantity",
-            "power_watts",
-            "description",
-            "dimensions",
-        ],
-    },
-
-    "cable": {
-        "purpose": (
-            "Cable inventory and physical/logical "
-            "connectivity."
-        ),
-        "fields": [
-            "source_device",
-            "source_port",
-            "target_device",
-            "target_port",
-            "cable_type",
-            "length",
-            "part_number",
-            "manufacturer",
-            "quantity",
-        ],
-    },
+Respond strictly with a JSON object matching this schema:
+{
+  "records": [
+    {
+      "part_number": "string or null",
+      "description": "string or null",
+      "quantity": 1.0,
+      "unit": "pcs",
+      "vendor": "string or null",
+      "category": "string or null",
+      "location": "string or null",
+      "confidence_score": 0.95
+    }
+  ]
 }
 
+Document Content:
+\"\"\"
+{content}
+\"\"\"
+"""
 
-def build_extraction_prompt(
-    document_content: str,
-    document_category: str,
-    source_file_name: str,
-    source_file_type: str = "",
-) -> str:
 
-    category = (
-        document_category
-        .strip()
-        .lower()
-    )
+P2P_EXTRACTION_PROMPT = """You are an expert Data Center Network and Cabling Engineer specializing in Point-to-Point (P2P) cable schedules and patch lists.
+Analyze the following document text and extract all cable connection records into structured JSON.
 
-    guidance = (
-        CATEGORY_EXTRACTION_GUIDANCE.get(
-            category,
-            {
-                "purpose": (
-                    "General data-center "
-                    "inventory information."
-                ),
-                "fields": CANONICAL_FIELDS,
-            },
-        )
-    )
+For each connection, identify:
+- source_device: Origin device or patch panel name (e.g. "Leaf-01", "Core-SW-A", "Rack-A01-PP1").
+- source_port: Origin port identifier (e.g. "Eth1/1", "Port 24", "Slot 2/Port 1").
+- target_device: Destination device or patch panel name (e.g. "Spine-01", "Server-01-NIC1").
+- target_port: Destination port identifier.
+- cable_type: Media type (e.g. "Cat6A", "OM4 MPO", "OS2 LC-LC", "100G QSFP28 DAC", "AOC").
+- part_number: Cable assembly part number if mentioned.
+- description: Details regarding length, color, or pathway.
+- quantity: Number of cables/connections (defaults to 1.0).
+- vendor: Cable manufacturer if mentioned.
+- confidence_score: Confidence in extraction between 0.0 and 1.0.
 
-    prioritized_fields = "\n".join(
-        f"- {field}"
-        for field in guidance[
-            "fields"
-        ]
-    )
+Respond strictly with a JSON object matching this schema:
+{
+  "records": [
+    {
+      "source_device": "string or null",
+      "source_port": "string or null",
+      "target_device": "string or null",
+      "target_port": "string or null",
+      "cable_type": "string or null",
+      "part_number": "string or null",
+      "description": "string or null",
+      "quantity": 1.0,
+      "vendor": "string or null",
+      "confidence_score": 0.90
+    }
+  ]
+}
 
-    canonical_fields = "\n".join(
-        f"- {field}"
-        for field in CANONICAL_FIELDS
-    )
-
-    return f"""
-You are a data-center document understanding
-and structured extraction system.
-
-BUSINESS CATEGORY:
-{category}
-
-CATEGORY PURPOSE:
-{guidance["purpose"]}
-
-SOURCE FILE:
-{source_file_name}
-
-SOURCE FILE TYPE:
-{source_file_type}
-
-==================================================
 IMPORTANT EXTRACTION REQUIREMENT
-==================================================
 
 The source document may contain ANY combination of:
 
@@ -222,9 +104,7 @@ Do NOT assume a fixed table structure.
 Do NOT ignore data simply because its column
 name is unfamiliar.
 
-==================================================
 SEMANTIC COLUMN MAPPING
-==================================================
 
 Map source fields according to their meaning.
 
@@ -257,9 +137,7 @@ Examples:
 Use the actual values and surrounding context
 when determining the meaning.
 
-==================================================
 TABLE EXTRACTION
-==================================================
 
 For every table:
 
@@ -274,9 +152,7 @@ For every table:
 If a document contains several tables,
 process all of them.
 
-==================================================
 ARCHITECTURE / DIAGRAM EXTRACTION
-==================================================
 
 If the document contains an architecture,
 rack, power, network or cable diagram:
@@ -307,23 +183,17 @@ Store the available information in:
 - raw_data
 - extra_fields
 
-==================================================
 CATEGORY-SPECIFIC FIELDS
-==================================================
 
 Prioritize these fields for this category:
 
 {prioritized_fields}
 
-==================================================
 CANONICAL FIELDS
-==================================================
 
 {canonical_fields}
 
-==================================================
 EXTRACTION RULES
-==================================================
 
 1. Extract all available relevant records.
 
@@ -364,9 +234,7 @@ EXTRACTION RULES
 14. For diagrams, preserve relationship
     information in raw_data or extra_fields.
 
-==================================================
 EXPECTED JSON
-==================================================
 
 Return ONLY JSON matching this structure:
 
@@ -400,9 +268,73 @@ Return ONLY JSON matching this structure:
   ]
 }}
 
-==================================================
 SOURCE DOCUMENT CONTENT
-==================================================
+Document Content:
+\"\"\"
+{content}
+\"\"\"
+"""
 
-{document_content}
+
+RACK_LAYOUT_EXTRACTION_PROMPT = """You are an expert Data Center Facilities Engineer specializing in Rack Elevation and Cabinet Space Planning.
+Analyze the following document text and extract all rack hardware allocations into structured JSON.
+
+For each mounted item, identify:
+- location: Rack identifier and U-elevation range (e.g. "Rack-A01 (U41-U42)", "Cabinet 102 (RU 15)").
+- part_number: Model or hardware code.
+- description: Equipment installed in the rack unit.
+- vendor: Manufacturer.
+- category: Equipment type (e.g. "TOR Switch", "Compute Node", "Storage Array", "PDU", "Cable Management").
+- quantity: Count of units installed.
+- confidence_score: Confidence in extraction between 0.0 and 1.0.
+
+Respond strictly with a JSON object matching this schema:
+{
+  "records": [
+    {
+      "location": "string or null",
+      "part_number": "string or null",
+      "description": "string or null",
+      "vendor": "string or null",
+      "category": "string or null",
+      "quantity": 1.0,
+      "confidence_score": 0.90
+    }
+  ]
+}
+
+Document Content:
+\"\"\"
+{content}
+\"\"\"
+"""
+
+
+GENERIC_EXTRACTION_PROMPT = """You are an AI Data Center Engineer. Extract all data center hardware, cables, power units, or components from the following text into structured JSON.
+
+Respond strictly with a JSON object matching this schema:
+{
+  "records": [
+    {
+      "part_number": "string or null",
+      "description": "string or null",
+      "quantity": 1.0,
+      "unit": "pcs",
+      "vendor": "string or null",
+      "category": "string or null",
+      "location": "string or null",
+      "source_device": "string or null",
+      "source_port": "string or null",
+      "target_device": "string or null",
+      "target_port": "string or null",
+      "cable_type": "string or null",
+      "confidence_score": 0.85
+    }
+  ]
+}
+
+Document Content:
+\"\"\"
+{content}
+\"\"\"
 """

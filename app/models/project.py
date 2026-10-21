@@ -8,8 +8,10 @@ from app.core.database import Base
 from app.utils.id_generator import generate_id
 
 if TYPE_CHECKING:
+    from app.models.comparison_run import ComparisonRun
     from app.models.document import Document
     from app.models.extracted_record import ExtractedRecord
+    from app.models.vendor import Vendor
 
 
 def get_utc_now():
@@ -35,6 +37,21 @@ class Project(Base):
         Text,
         nullable=True,
     )
+    status: Mapped[str] = mapped_column(
+        String(50),
+        default="active",
+        nullable=False,
+        index=True,
+    )  # "active" | "complete" | "archived"
+    owner_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+    created_by: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=get_utc_now,
@@ -57,3 +74,17 @@ class Project(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+    vendors: Mapped[List["Vendor"]] = relationship(
+        "Vendor",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    comparison_runs: Mapped[List["ComparisonRun"]] = relationship(
+        "ComparisonRun",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="ComparisonRun.run_number.desc()",
+    )
+
