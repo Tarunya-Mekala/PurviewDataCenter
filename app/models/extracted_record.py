@@ -322,8 +322,6 @@ class ExtractedRecord(Base):
         nullable=False,
         index=True,
     )
-
-    )  # "pending_review", "approved", "modified", "rejected"
     reviewed_by: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
@@ -382,7 +380,6 @@ class ExtractedRecord(Base):
     project: Mapped["Project"] = relationship(
         "Project",
         back_populates="extracted_records",
-    )
     )
     history: Mapped[List["RecordReviewAction"]] = relationship(
         "RecordReviewAction",
