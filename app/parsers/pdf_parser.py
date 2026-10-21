@@ -1,59 +1,285 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-import fitz  # PyMuPDF
+from typing import Any
+
+import pdfplumber
 
 
-def extract_text_from_pdf(file_path: str | Path, max_pages: Optional[int] = None) -> str:
+def parse_pdf_file(
+    file_path: Path,
+) -> dict[str, Any]:
     """
-    Extract text content from a PDF file page by page.
+    Parse the complete PDF.
+
+    Preserves:
+
+    - every page
+    - page text
+    - tables
+    - table rows
+    - table columns
+    - words and coordinates
+    - detected lines / rectangles
     """
+
     file_path = Path(file_path)
+
     if not file_path.exists():
-        raise FileNotFoundError(f"PDF file not found: {file_path}")
+        raise FileNotFoundError(
+            f"PDF not found: {file_path}"
+        )
 
-    text_parts: List[str] = []
-    doc = fitz.open(str(file_path))
-    try:
-        total_pages = len(doc)
-        pages_to_process = min(total_pages, max_pages) if max_pages else total_pages
-        for page_idx in range(pages_to_process):
-            page = doc[page_idx]
-            page_text = page.get_text("text").strip()
-            if page_text:
-                text_parts.append(f"--- Page {page_idx + 1} ---\n{page_text}")
-    finally:
-        doc.close()
+    pages: list[dict[str, Any]] = []
 
-    return "\n\n".join(text_parts)
+    with pdfplumber.open(
+        file_path
+    ) as pdf:
+
+        for page_number, page in enumerate(
+            pdf.pages,
+            start=1,
+        ):
+
+            page_text = (
+                page.extract_text()
+                or ""
+            )
+
+            words = page.extract_words(
+                keep_blank_chars=False
+            )
+
+            tables = []
+
+            try:
+                extracted_tables = (
+                    page.extract_tables()
+                )
+
+                for table_index, table in enumerate(
+                    extracted_tables or [],
+                    start=1,
+                ):
+
+                    rows = []
+
+                    for row_index, row in enumerate(
+                        table,
+                        start=1,
+                    ):
+
+                        rows.append(
+                            {
+                                "row_number": row_index,
+                                "cells": [
+                                    {
+                                        "column_position": column_index,
+                                        "value": (
+                                            str(cell).strip()
+                                            if cell is not None
+                                            else ""
+                                        ),
+                                    }
+                                    for column_index, cell
+                                    in enumerate(
+                                        row,
+                                        start=1,
+                                    )
+                                ],
+                            }
+                        )
+
+                    tables.append(
+                        {
+                            "table_number": table_index,
+                            "rows": rows,
+                        }
+                    )
+
+            except Exception:
+                tables = []
+
+            lines = []
+
+            for line in page.lines:
+
+                lines.append(
+                    {
+                        "type": "line",
+                        "x0": line.get("x0"),
+                        "y0": line.get("y0"),
+                        "x1": line.get("x1"),
+                        "y1": line.get("y1"),
+                    }
+                )
+
+            rectangles = []
+
+            for rect in page.rects:
+
+                rectangles.append(
+                    {
+                        "type": "rectangle",
+                        "x0": rect.get("x0"),
+                        "y0": rect.get("y0"),
+                        "x1": rect.get("x1"),
+                        "y1": rect.get("y1"),
+                    }
+                )
+
+            pages.append(
+                {
+                    "page_number": page_number,
+
+                    "width": page.width,
+
+                    "height": page.height,
+
+                    "text": page_text,
+
+                    "words": words,
+
+                    "tables": tables,
+
+                    "lines": lines,
+
+                    "rectangles": rectangles,
+                }
+            )
+
+    return {
+        "file_name": file_path.name,
+        "file_type": file_path.suffix.lower(),
+        "page_count": len(pages),
+        "pages": pages,
+    }
 
 
-def parse_pdf_tables(file_path: str | Path) -> List[Dict[str, Any]]:
+def pdf_to_llm_text(
+    parsed_pdf: dict[str, Any],
+) -> str:
     """
-    Extract structured table data from PDF pages if tables are detected.
+    Convert complete PDF structure into LLM-readable text.
     """
-    file_path = Path(file_path)
-    if not file_path.exists():
-        raise FileNotFoundError(f"PDF file not found: {file_path}")
 
-    tables_found: List[Dict[str, Any]] = []
-    doc = fitz.open(str(file_path))
-    try:
-        for page_idx, page in enumerate(doc, start=1):
-            tables = getattr(page, "find_tables", lambda: None)()
-            if tables and tables.tables:
-                for t_idx, table in enumerate(tables.tables):
-                    table_data = table.extract()
-                    if table_data and len(table_data) > 1:
-                        headers = [str(c).strip() if c else "" for c in table_data[0]]
-                        tables_found.append({
-                            "page": page_idx,
-                            "table_index": t_idx + 1,
-                            "headers": headers,
-                            "rows": table_data[1:],
-                        })
-    finally:
-        doc.close()
+    output: list[str] = []
 
-    return tables_found
+    output.append(
+        "===== PDF DOCUMENT ====="
+    )
+
+    output.append(
+        f"FILE: "
+        f"{parsed_pdf.get('file_name', '')}"
+    )
+
+    output.append(
+        f"PAGES: "
+        f"{parsed_pdf.get('page_count', 0)}"
+    )
+
+    for page in parsed_pdf.get(
+        "pages",
+        [],
+    ):
+
+        page_number = page[
+            "page_number"
+        ]
+
+        output.append(
+            f"\n===== PAGE "
+            f"{page_number} ====="
+        )
+
+        output.append(
+            "\n--- PAGE TEXT ---"
+        )
+
+        output.append(
+            page.get(
+                "text",
+                "",
+            )
+        )
+
+        output.append(
+            "\n--- TABLES ---"
+        )
+
+        for table in page.get(
+            "tables",
+            [],
+        ):
+
+            output.append(
+                f"\nTABLE "
+                f"{table['table_number']}:"
+            )
+
+            for row in table.get(
+                "rows",
+                [],
+            ):
+
+                output.append(
+                    f"ROW "
+                    f"{row['row_number']}: "
+                    + " | ".join(
+                        str(
+                            cell.get(
+                                "value",
+                                "",
+                            )
+                        )
+                        for cell in row.get(
+                            "cells",
+                            [],
+                        )
+                    )
+                )
+
+        output.append(
+            "\n--- VISUAL LINES ---"
+        )
+
+        for line in page.get(
+            "lines",
+            [],
+        ):
+
+            output.append(
+                str(line)
+            )
+
+        output.append(
+            "\n--- VISUAL RECTANGLES ---"
+        )
+
+        for rectangle in page.get(
+            "rectangles",
+            [],
+        ):
+
+            output.append(
+                str(rectangle)
+            )
+
+    return "\n".join(output)
+
+
+def extract_text_from_pdf(
+    file_path: Path,
+) -> str:
+    """
+    Backward-compatible helper.
+    """
+
+    parsed = parse_pdf_file(
+        file_path
+    )
+
+    return pdf_to_llm_text(
+        parsed
+    )
