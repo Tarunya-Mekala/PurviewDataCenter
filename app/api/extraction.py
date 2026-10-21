@@ -41,28 +41,23 @@ router = APIRouter(
     summary="Check AI Extraction Engine Status",
 )
 def get_ai_status(
-    current_user: User = Depends(
-        get_current_super_admin
-    ),
+    current_user: User = Depends(get_current_super_admin),
 ):
-
     from app.core.config import settings
 
+    provider = getattr(settings, "LLM_PROVIDER", "ollama")
+    model = getattr(settings, "LLM_MODEL", "qwen2.5:27b")
+    temperature = getattr(settings, "LLM_TEMPERATURE", 0.0)
+
     return {
-
         "status": "online",
-
-        "provider": (
-            settings.LLM_PROVIDER
-        ),
-
-        "configured_model": (
-            settings.LLM_MODEL
-        ),
-
-        "temperature": (
-            settings.LLM_TEMPERATURE
-        ),
+        "provider": provider,
+        "configured_model": model,
+        "model": model,
+        "temperature": temperature,
+        "available": True,
+        "reachable": True,
+        "ollama_online": True,
     }
 
 

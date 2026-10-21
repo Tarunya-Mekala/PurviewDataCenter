@@ -15,7 +15,11 @@ class Settings(BaseSettings):
     )
 
     OLLAMA_BASE_URL: str = "http://localhost:11434"
+    LLM_PROVIDER: str = "ollama"
     LLM_MODEL: str = "qwen2.5:27b"
+    LLM_API_KEY: Optional[str] = None
+    LLM_TIMEOUT_SECONDS: int = 180
+    LLM_TEMPERATURE: float = 0.0
 
     UPLOAD_DIR: str = str(BASE_DIR / "data" / "uploads")
     EXTRACTED_DIR: str = str(BASE_DIR / "data" / "extracted")
