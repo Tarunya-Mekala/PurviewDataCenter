@@ -511,11 +511,8 @@ class DocumentService:
     @staticmethod
     def reprocess_document(db: Session, document_id: str) -> Document:
         doc = DocumentService.get_document(db, document_id)
-        if not Path(doc.file_path).exists():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Original document file '{doc.filename}' is missing from storage.",
-            )
+        # Ensure file actually exists in storage
+        DocumentService.get_document_file_path(db, document_id)
 
         doc.status = DocumentStatus.PENDING.value
         doc.error_message = None
@@ -530,9 +527,18 @@ class DocumentService:
         doc = DocumentService.get_document(db, document_id)
         file_path = Path(doc.file_path)
         if not file_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Original document file for '{doc.filename}' was not found on disk.",
-            )
+            # Fallback relative to current settings.UPLOAD_DIR
+            alt_path = Path(settings.UPLOAD_DIR) / doc.project_id / doc.stored_filename
+            if alt_path.exists():
+                file_path = alt_path
+            else:
+                matches = list(Path(settings.UPLOAD_DIR).glob(f"**/{doc.stored_filename}"))
+                if matches:
+                    file_path = matches[0]
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Original document file for '{doc.filename}' was not found on disk.",
+                    )
         mime_type = get_mime_type_for_file(file_path)
         return file_path, doc.filename, mime_type

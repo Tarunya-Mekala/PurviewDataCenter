@@ -10,30 +10,6 @@ from app.schemas.record import (
 )
 from app.services.extraction_service import ExtractionService
 
-router = APIRouter(tags=["Document Parsing & AI Extraction"])
-
-
-# ---------------------------------------------------------
-# AI Status & Model Inspection
-# ---------------------------------------------------------
-
-@router.get(
-    "/ai/status",
-    summary="Check AI LLM Engine Status",
-    description="Inspect LLM engine status, provider, and active model.",
-)
-def get_ai_status(
-    current_user: User = Depends(get_current_super_admin),
-):
-    from app.ai.llm import llm_client
-    from app.core.config import settings
-
-    return {
-        "status": "online",
-        "provider": settings.LLM_PROVIDER,
-        "configured_model": settings.LLM_MODEL,
-        "temperature": settings.LLM_TEMPERATURE,
-    }
 router = APIRouter(tags=["Document Parsing & Extraction"])
 
 

@@ -1,8 +1,8 @@
+import sys
 from logging.config import fileConfig
 from pathlib import Path
-import sys
 
-# Add project root to Python path
+# Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from alembic import context

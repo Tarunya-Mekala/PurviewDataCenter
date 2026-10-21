@@ -1,21 +1,11 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from sqlalchemy import (
-    Boolean,
-    DateTime,
-    Float,
-    ForeignKey,
-    Integer,
-    JSON,
-    String,
-    Text,
-)
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.utils.id_generator import generate_id
-
 
 if TYPE_CHECKING:
     from app.models.document import Document
@@ -30,74 +20,44 @@ def get_utc_now():
 class ExtractedRecord(Base):
     __tablename__ = "extracted_records"
 
-    # =========================================================
-    # Primary Key
-    # =========================================================
-
     id: Mapped[str] = mapped_column(
         String(64),
         primary_key=True,
         default=lambda: generate_id("rec"),
         index=True,
     )
-
-    # =========================================================
-    # Relationships / Foreign Keys
-    # =========================================================
-
     project_id: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey(
-            "projects.id",
-            ondelete="CASCADE",
-        ),
+        ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-
     document_id: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey(
-            "documents.id",
-            ondelete="CASCADE",
-        ),
+        ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    # =========================================================
     # Classification & Category
-    # =========================================================
-
     record_type: Mapped[str] = mapped_column(
         String(50),
         default="bom_item",
         nullable=False,
         index=True,
     )
-
     category: Mapped[Optional[str]] = mapped_column(
         String(100),
         nullable=True,
         index=True,
     )
 
-    # =========================================================
-    # Canonical Equipment / Inventory Fields
-    # =========================================================
-
-    equipment_name: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True,
-        index=True,
-    )
-
+    # Core hardware & BOM fields
     part_number: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
         index=True,
     )
-
     cleaned_part_number: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
@@ -127,52 +87,18 @@ class ExtractedRecord(Base):
         nullable=True,
     )
 
-    model: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True,
-    )
-
-    manufacturer: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True,
-        index=True,
-    )
-
-    vendor: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True,
-        index=True,
-    )
-
     # Problem 5: Never default to 1 or pcs when not present in file!
     quantity: Mapped[Optional[float]] = mapped_column(
         Float,
         default=None,
         nullable=True,
     )
-
     unit: Mapped[Optional[str]] = mapped_column(
         String(50),
         default=None,
         nullable=True,
     )
 
-    # =========================================================
-    # Rack Information
-    # =========================================================
-
-    rack_id: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True,
-        index=True,
-    )
-
-    u_position: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True,
-    )
-
-    # Existing generic location field
     manufacturer: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
@@ -208,57 +134,27 @@ class ExtractedRecord(Base):
         nullable=True,
     )
 
-    # =========================================================
-    # Connectivity / P2P / Cabling Fields
-    # =========================================================
-
+    # Connectivity / P2P Cabling fields
     source_device: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
     )
-
     source_port: Mapped[Optional[str]] = mapped_column(
         String(100),
         nullable=True,
     )
-
     target_device: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
     )
-
     target_port: Mapped[Optional[str]] = mapped_column(
         String(100),
         nullable=True,
     )
-
     cable_type: Mapped[Optional[str]] = mapped_column(
         String(100),
         nullable=True,
     )
-
-    cable_length: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True,
-    )
-
-    # =========================================================
-    # Power / Physical Information
-    # =========================================================
-
-    power_watts: Mapped[Optional[float]] = mapped_column(
-        Float,
-        nullable=True,
-    )
-
-    dimensions: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True,
-    )
-
-    # =========================================================
-    # AI Extraction Metadata
-    # =========================================================
 
     # Extraction Metadata & Method
     confidence_score: Mapped[float] = mapped_column(
@@ -266,7 +162,6 @@ class ExtractedRecord(Base):
         default=1.0,
         nullable=False,
     )
-
     extraction_method: Mapped[str] = mapped_column(
         String(50),
         default="table",
@@ -301,7 +196,6 @@ class ExtractedRecord(Base):
         String(255),
         nullable=True,
     )
-
     source_row: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
@@ -312,10 +206,7 @@ class ExtractedRecord(Base):
     )
 
 
-    # =========================================================
     # Human Review & Verification
-    # =========================================================
-
     review_status: Mapped[str] = mapped_column(
         String(50),
         default="pending_review",
@@ -326,24 +217,20 @@ class ExtractedRecord(Base):
         String(255),
         nullable=True,
     )
-
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
-
     review_notes: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
     )
-
     is_manually_added: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
         nullable=False,
     )
 
-    # =========================================================
     # Problem 9: Soft delete
     is_deleted: Mapped[bool] = mapped_column(
         Boolean,
@@ -353,30 +240,21 @@ class ExtractedRecord(Base):
     )
 
     # Timestamps
-    # =========================================================
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=get_utc_now,
-        nullable=False,
     )
-
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=get_utc_now,
         onupdate=get_utc_now,
-        nullable=False,
     )
 
-    # =========================================================
     # Relationships
-    # =========================================================
-
     document: Mapped["Document"] = relationship(
         "Document",
         back_populates="extracted_records",
     )
-
     project: Mapped["Project"] = relationship(
         "Project",
         back_populates="extracted_records",
