@@ -2,7 +2,7 @@ import csv
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from fastapi import BackgroundTasks, HTTPException, status
 from sqlalchemy import func, or_, select
@@ -99,8 +99,15 @@ def record_to_values_dict(record: ExtractedRecord) -> Dict[str, Any]:
     }
 
 
+from app.parsers.docx_parser import (
+    parse_docx_file,
+    docx_to_llm_text,
+)
 
-class ExtractionService:
+from app.parsers.image_parser import (
+    parse_image_file,
+    image_to_llm_text,
+)
 
     @staticmethod
     def _parse_row_dict(
@@ -779,19 +786,15 @@ class ExtractionService:
                 detail=f"Document '{document_id}' not found.",
             )
 
-        file_path = Path(doc.file_path)
-        if not file_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Source file missing from disk storage.",
+            return excel_to_llm_text(
+                parsed
             )
 
-        doc.status = DocumentStatus.EXTRACTING.value
-        db.commit()
+        # -----------------------------------------------------
+        # PDF
+        # -----------------------------------------------------
 
-        text_content = ExtractionService.extract_document_text(file_path)
-        if not text_content.strip():
-            return ExtractionService.extract_document(db, document_id)
+        if extension in PDF_EXTENSIONS:
 
         try:
             ai_records = extract_records_with_llm(
@@ -850,9 +853,7 @@ class ExtractionService:
                 )
                 db.add(rec)
 
-            doc.status = DocumentStatus.EXTRACTED.value
-            doc.error_message = None
-            db.commit()
+        if extension in DOCX_EXTENSIONS:
 
             return ExtractionJobResponse(
                 document_id=doc.id,
@@ -882,15 +883,9 @@ class ExtractionService:
                 detail=f"AI extraction failed: {str(e)}",
             )
 
-    @staticmethod
-    def extract_raw_snippet_with_ai(
-        text: str,
-        document_type: str = "bom",
-        model: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Run AI extraction directly on an arbitrary text or table snippet."""
-        from app.ai.chains import extract_records_with_llm
-        from app.core.config import settings
+        # -----------------------------------------------------
+        # IMAGE
+        # -----------------------------------------------------
 
         target_model = model or settings.LLM_MODEL
         try:
@@ -904,11 +899,19 @@ class ExtractionService:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(ce),
             )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"AI extraction error: {str(e)}",
+
+            return image_to_llm_text(
+                parsed
             )
+
+        raise ValueError(
+            f"Unsupported file type: "
+            f"{extension}"
+        )
+
+    # =========================================================
+    # AI EXTRACTION
+    # =========================================================
 
     @staticmethod
     def run_background_extraction(document_id: str) -> None:
@@ -962,26 +965,38 @@ class ExtractionService:
                 detail=f"Project '{project_id}' not found.",
             )
 
-        docs = db.execute(
-            select(Document).where(Document.project_id == project_id)
-        ).scalars().all()
+                "records_extracted": (
+                    records_saved
+                ),
 
-        results = []
-        for d in docs:
+                "model_used": (
+                    model
+                    or settings.LLM_MODEL
+                ),
+
+                "message": (
+                    f"Successfully extracted "
+                    f"{records_saved} records."
+                ),
+            }
+
+        except HTTPException:
+
+            db.rollback()
+
+            raise
+
+        except Exception as exc:
+
+            db.rollback()
+
             try:
-                res = ExtractionService.extract_document(db, d.id)
-                results.append(res)
-            except HTTPException as he:
-                results.append(
-                    ExtractionJobResponse(
-                        document_id=d.id,
-                        document_name=d.filename,
-                        status="failed",
-                        records_extracted=0,
-                        message=str(he.detail),
+
+                failed_doc = db.execute(
+                    select(Document).where(
+                        Document.id == document_id
                     )
-                )
-        return results
+                ).scalar_one_or_none()
 
     @staticmethod
     def list_records(
@@ -1022,12 +1037,18 @@ class ExtractionService:
                 )
             )
 
-        total = db.execute(select(func.count()).select_from(query.subquery())).scalar() or 0
-        records = db.execute(
-            query.order_by(ExtractedRecord.created_at.asc()).offset(skip).limit(limit)
-        ).scalars().all()
+                    failed_doc.status = "failed"
 
-        return total, records
+                    failed_doc.error_message = (
+                        f"AI extraction error: "
+                        f"{str(exc)}"
+                    )
+
+                    db.commit()
+
+            except Exception:
+
+                db.rollback()
 
     @staticmethod
     def get_record(db: Session, record_id: str) -> ExtractedRecord:
@@ -1040,10 +1061,18 @@ class ExtractionService:
         ).scalar_one_or_none()
         if not record:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Extracted record '{record_id}' not found.",
+                status_code=(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR
+                ),
+                detail=(
+                    f"AI extraction failed: "
+                    f"{str(exc)}"
+                ),
             )
-        return record
+
+    # =========================================================
+    # RAW TEXT EXTRACTION
+    # =========================================================
 
     @staticmethod
     def update_record(
@@ -1332,7 +1361,7 @@ class ExtractionService:
         }
 
     @staticmethod
-    def create_manual_record(
+    def get_document_extraction_status(
         db: Session,
         document_id: str,
         create_data: ExtractedRecordCreate,
@@ -1341,9 +1370,12 @@ class ExtractionService:
         """Manually insert an extracted record and log creation audit."""
         doc = db.execute(select(Document).where(Document.id == document_id)).scalar_one_or_none()
         if not doc:
+
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Document '{document_id}' not found.",
+                status_code=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+                detail="Document not found.",
             )
 
         data = create_data.model_dump()
@@ -1464,19 +1496,7 @@ class ExtractionService:
             )
         ).scalars().all()
 
-        total = len(records)
-        pending = sum(1 for r in records if r.review_status == ReviewStatus.PENDING_REVIEW.value)
-        approved = sum(1 for r in records if r.review_status == ReviewStatus.APPROVED.value)
-        modified = sum(1 for r in records if r.review_status == ReviewStatus.MODIFIED.value)
-        rejected = sum(1 for r in records if r.review_status == ReviewStatus.REJECTED.value)
-
-        reviewed_count = approved + modified + rejected
-        completion_pct = round((reviewed_count / total * 100), 1) if total > 0 else 0.0
-        avg_conf = (
-            round(sum(r.confidence_score for r in records) / total, 2)
-            if total > 0
-            else 0.0
-        )
+        results = []
 
         docs = db.execute(select(Document).where(Document.project_id == project_id)).scalars().all()
         doc_vendor_map = {}

@@ -2,16 +2,31 @@ from fastapi import APIRouter, BackgroundTasks, Depends, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_super_admin
+from app.core.security import (
+    get_current_super_admin,
+)
+
 from app.models.user import User
+
 from app.schemas.record import (
     DocumentExtractionStatusResponse,
     ExtractionJobResponse,
 )
-from app.services.extraction_service import ExtractionService
 
 router = APIRouter(tags=["Document Parsing & Extraction"])
 
+        "provider": (
+            settings.LLM_PROVIDER
+        ),
+
+        "configured_model": (
+            settings.LLM_MODEL
+        ),
+
+        "temperature": (
+            settings.LLM_TEMPERATURE
+        ),
+    }
 
 # ---------------------------------------------------------
 # Document Extraction & Triggers
@@ -25,9 +40,13 @@ router = APIRouter(tags=["Document Parsing & Extraction"])
     description="Parse tabular sheets, PDF tables, or CSV data into structured equipment records.",
 )
 def extract_document(
+
     document_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+
+    current_user: User = Depends(
+        get_current_super_admin
+    ),
 ):
     return ExtractionService.extract_document(db, document_id)
 
@@ -35,15 +54,26 @@ def extract_document(
 @router.get(
     "/documents/{document_id}/extraction-status",
     response_model=DocumentExtractionStatusResponse,
-    summary="Get document extraction progress",
-    description="Check processing state, number of records extracted, and review decision breakdown.",
+    summary="Get extraction status",
 )
 def get_document_extraction_status(
+
     document_id: str,
+
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+
+    current_user: User = Depends(
+        get_current_super_admin
+    ),
 ):
-    return ExtractionService.get_document_extraction_status(db, document_id)
+
+    return (
+        ExtractionService
+        .get_document_extraction_status(
+            db,
+            document_id,
+        )
+    )
 
 
 @router.post(
@@ -53,9 +83,13 @@ def get_document_extraction_status(
     description="Run the extraction pipeline asynchronously on all documents within a project. Returns HTTP 202 immediately.",
 )
 def extract_all_documents(
+
     project_id: str,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+
+    current_user: User = Depends(
+        get_current_super_admin
+    ),
 ):
     return ExtractionService.queue_extract_all_project_documents(db, project_id, background_tasks)

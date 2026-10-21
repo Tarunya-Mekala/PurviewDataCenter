@@ -28,6 +28,7 @@ pandas
 openpyxl
 xlrd
 PyMuPDF
+pdfplumber
 python-docx
 Pillow
 
