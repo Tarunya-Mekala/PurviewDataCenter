@@ -4,12 +4,17 @@ from __future__ import annotations
 CANONICAL_FIELDS = [
     "equipment_name",
     "part_number",
+    "serial_number",
     "description",
     "model",
     "manufacturer",
     "vendor",
+    "condition",
+    "condition_notes",
     "quantity",
     "unit",
+    "location",
+    "rack",
     "rack_id",
     "u_position",
     "source_device",
@@ -32,6 +37,7 @@ CATEGORY_EXTRACTION_GUIDANCE = {
         "fields": [
             "equipment_name",
             "part_number",
+            "serial_number",
             "description",
             "model",
             "manufacturer",
@@ -206,6 +212,10 @@ The source document may contain ANY combination of:
 15. Multiple sheets in the same workbook
 
 You MUST inspect all supplied content.
+For image attachments, inspect the visual source itself in addition
+to the OCR text, including table structure, diagram labels, and
+spatial relationships. Treat OCR text as supporting evidence, not
+as a replacement for the image.
 
 Do NOT assume that the first row is always
 the header.
@@ -236,6 +246,15 @@ Examples:
 
 "Maker" -> manufacturer
 
+"Brand" -> manufacturer
+
+"Supplier" -> vendor
+
+"Vendor" -> manufacturer when the column identifies
+the equipment maker or brand; otherwise map it to vendor.
+
+"Vendor Name" -> vendor
+
 "ITEM NAME" -> equipment_name
 
 "Product Name" -> equipment_name
@@ -244,15 +263,41 @@ Examples:
 
 "PART NO" -> part_number
 
+"Part No" -> part_number
+
 "Item Code" -> part_number
 
 "SKU" -> part_number
+
+"Product Code" -> part_number
+
+"Serial No" -> serial_number
+
+"Serial Number" -> serial_number
 
 "QTY" -> quantity
 
 "Quantity" -> quantity
 
 "Count" -> quantity
+
+"Rack Name" -> rack_id
+
+"Rack ID" -> rack_id
+
+"Rack" -> rack_id
+
+"Rack Position" -> u_position
+
+"U Position" -> u_position
+
+"RU" -> u_position
+
+"Wattage" -> power_watts
+
+"Power Rating" -> power_watts
+
+"Cable Length" -> length
 
 Use the actual values and surrounding context
 when determining the meaning.
@@ -265,11 +310,14 @@ For every table:
 
 - preserve every available row
 - preserve every available column
+- support headers that appear above or beside the data, and multi-row headers
 - preserve values even when some cells are empty
 - identify likely headers semantically
 - preserve source information in raw_data
 - do not drop unknown columns
 - place unmapped information in extra_fields
+- associate each value with the correct row and all applicable headers
+- do not combine adjacent cells unless the source clearly presents them as one value
 
 If a document contains several tables,
 process all of them.
@@ -332,37 +380,48 @@ EXTRACTION RULES
 3. If a value cannot be determined,
    return null.
 
-4. Preserve the original value in raw_data
+4. Copy each extracted value exactly as printed or stored in the source.
+   Do not normalize, repair, complete, calculate, or infer a value.
+
+5. Missing values must be JSON null. Never substitute a default such as
+   quantity 1, unit "pcs", or a guessed manufacturer.
+
+6. Preserve the original value in raw_data
    when useful.
 
-5. Preserve unmapped source fields in
+7. Preserve unmapped source fields in
    extra_fields.
 
-6. Preserve source context whenever available.
+8. Preserve source context whenever available.
 
-7. Confidence must be between 0 and 1.
+9. Confidence must be between 0 and 1.
 
-8. Use a lower confidence when the mapping
+10. Use a lower confidence when the mapping
    is ambiguous.
 
-9. Use category="{category}".
+11. Use category="{category}".
 
-10. record_type should describe the type of
+12. record_type should describe the type of
     extracted record.
 
-11. Do not merge two different physical
+13. Do not merge two different physical
     components into one record unless the
     source clearly represents them as one item.
 
-12. Do not discard duplicate rows unless the
+14. Do not discard duplicate rows unless the
     source explicitly indicates that they are
     duplicates.
 
-13. Quantity must represent the source quantity,
+15. Quantity must represent the source quantity,
     not an inferred quantity.
 
-14. For diagrams, preserve relationship
+16. For diagrams, preserve relationship
     information in raw_data or extra_fields.
+
+17. Only use values that appear in the supplied source content or
+    images. Keep identifiers, serial numbers, quantities, and labels
+    verbatim; any interpretation that is not explicitly printed must
+    be null.
 
 ==================================================
 EXPECTED JSON
@@ -377,12 +436,17 @@ Return ONLY JSON matching this structure:
       "record_type": "inventory_item",
       "equipment_name": null,
       "part_number": null,
+      "serial_number": null,
       "description": null,
       "model": null,
       "manufacturer": null,
       "vendor": null,
+      "condition": null,
+      "condition_notes": null,
       "quantity": null,
       "unit": null,
+      "location": null,
+      "rack": null,
       "rack_id": null,
       "u_position": null,
       "source_device": null,

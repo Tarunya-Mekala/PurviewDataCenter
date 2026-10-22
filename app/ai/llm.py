@@ -1,10 +1,14 @@
 import json
-from typing import Any, Optional
+import logging
+from typing import Any, Optional, Sequence
 
 from google import genai
 from google.genai import types
 
 from app.core.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -22,28 +26,34 @@ class LLMClient:
     """
 
     def __init__(self):
-        if settings.LLM_PROVIDER.lower() != "gemini":
-            raise ValueError(
-                f"Unsupported LLM provider: {settings.LLM_PROVIDER}"
-            )
-
-        if not settings.LLM_API_KEY:
-            raise ValueError(
-                "LLM_API_KEY is missing. "
-                "Add your Gemini API key to the .env file."
-            )
-
-        self.client = genai.Client(
-            api_key=settings.LLM_API_KEY
+        self.client = (
+            genai.Client(api_key=settings.LLM_API_KEY)
+            if settings.LLM_PROVIDER.lower() == "gemini"
+            and settings.LLM_API_KEY
+            else None
         )
-
         self.model = settings.LLM_MODEL
+
+    def is_available(self, model: Optional[str] = None) -> bool:
+        if self.client is None:
+            return False
+
+        try:
+            self.client.models.get(model=model or self.model)
+        except Exception as exc:
+            logger.warning("LLM provider is unavailable: %s", exc)
+            return False
+        return True
 
     def generate(
         self,
         prompt: str,
         system_instruction: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> str:
+
+        if self.client is None:
+            raise RuntimeError("LLM provider is not configured.")
 
         config = types.GenerateContentConfig(
             temperature=settings.LLM_TEMPERATURE,
@@ -53,7 +63,7 @@ class LLMClient:
             config.system_instruction = system_instruction
 
         response = self.client.models.generate_content(
-            model=self.model,
+            model=model or self.model,
             contents=prompt,
             config=config,
         )
@@ -68,7 +78,12 @@ class LLMClient:
         prompt: str,
         response_schema: Optional[dict[str, Any]] = None,
         system_instruction: Optional[str] = None,
+        model: Optional[str] = None,
+        image_inputs: Optional[Sequence[tuple[bytes, str]]] = None,
     ) -> dict[str, Any]:
+
+        if self.client is None:
+            raise RuntimeError("LLM provider is not configured.")
 
         config = types.GenerateContentConfig(
             temperature=settings.LLM_TEMPERATURE,
@@ -81,9 +96,22 @@ class LLMClient:
         if system_instruction:
             config.system_instruction = system_instruction
 
+        contents: str | list[Any] = prompt
+        if image_inputs:
+            contents = [
+                prompt,
+                *[
+                    types.Part.from_bytes(
+                        data=image_data,
+                        mime_type=mime_type,
+                    )
+                    for image_data, mime_type in image_inputs
+                ],
+            ]
+
         response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
+            model=model or self.model,
+            contents=contents,
             config=config,
         )
 

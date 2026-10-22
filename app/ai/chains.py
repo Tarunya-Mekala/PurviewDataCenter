@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from app.ai.llm import llm_client
 from app.ai.prompts.extraction_prompt import (
@@ -44,6 +44,11 @@ LLM_RESPONSE_SCHEMA = {
                         "nullable": True,
                     },
 
+                    "serial_number": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
                     "description": {
                         "type": "string",
                         "nullable": True,
@@ -60,6 +65,26 @@ LLM_RESPONSE_SCHEMA = {
                     },
 
                     "vendor": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "location": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "rack": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "condition": {
+                        "type": "string",
+                        "nullable": True,
+                    },
+
+                    "condition_notes": {
                         "type": "string",
                         "nullable": True,
                     },
@@ -295,6 +320,7 @@ def extract_records_with_llm(
     document_type: Optional[str] = None,
     source_file_type: Optional[str] = None,
     model: Optional[str] = None,
+    image_inputs: Optional[Sequence[tuple[bytes, str]]] = None,
 ) -> CanonicalInventoryDocument:
 
     content = (
@@ -343,6 +369,10 @@ def extract_records_with_llm(
         response_schema=(
             LLM_RESPONSE_SCHEMA
         ),
+
+        model=model,
+
+        image_inputs=image_inputs,
     )
 
     return _validate_records(

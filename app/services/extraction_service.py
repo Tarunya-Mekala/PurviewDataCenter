@@ -1,5 +1,7 @@
 import csv
+import io
 import re
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -490,54 +492,523 @@ class ExtractionService:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 return f.read(50000)
         elif ext in [".xlsx", ".xls", ".xlsm"]:
-            try:
-                from app.parsers.excel_parser import parse_excel_file, excel_to_llm_text
-                parsed = parse_excel_file(file_path)
-                return excel_to_llm_text(parsed)
-                import openpyxl
-                wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
-                lines = []
-                for s in wb.sheetnames:
-                    sheet = wb[s]
-                    lines.append(f"--- SHEET: {s} ---")
-                    for row in sheet.iter_rows(values_only=True):
-                        non_empty = [str(c) for c in row if c is not None and str(c).strip()]
-                        if non_empty:
-                            lines.append(" | ".join(non_empty))
-                wb.close()
-                return "\n".join(lines[:1000])
-            except Exception:
-                text_lines = []
-                try:
-                    import openpyxl
-                    wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
-                    for sheet_name in wb.sheetnames[:5]:
-                        text_lines.append(f"--- Sheet: {sheet_name} ---")
-                        sheet = wb[sheet_name]
-                        for r in list(sheet.iter_rows(values_only=True))[:200]:
-                            row_str = "\t".join([str(c).strip() for c in r if c is not None])
-                            if row_str.strip():
-                                text_lines.append(row_str)
-                    wb.close()
-                    return "\n".join(text_lines)
-                except Exception:
-                    return ""
+            from app.parsers.excel_parser import parse_excel_file, excel_to_llm_text
+            parsed = parse_excel_file(file_path)
+            return excel_to_llm_text(parsed)
         elif ext == ".pdf":
-            try:
-                from app.parsers.pdf_parser import extract_text_from_pdf
-                return extract_text_from_pdf(file_path)
-                import importlib
-                try:
-                    fitz = importlib.import_module("fitz")
-                except ImportError:
-                    fitz = importlib.import_module("pymupdf")
-                doc = fitz.open(file_path)
-                text = "\n".join(page.get_text("text") for page in doc)
-                doc.close()
-                return text[:50000]
-            except Exception:
-                return ""
+            from app.parsers.pdf_parser import parse_pdf_file, pdf_to_llm_text
+
+            parsed = parse_pdf_file(file_path)
+            pages = parsed.get("pages", [])
+            pages_needing_ocr = [
+                page["page_number"]
+                for page in pages
+                if not page.get("text", "").strip()
+                and not any(
+                    cell.get("value", "").strip()
+                    for table in page.get("tables", [])
+                    for row in table.get("rows", [])
+                    for cell in row.get("cells", [])
+                )
+            ]
+
+            ocr_pages = []
+            if pages_needing_ocr:
+                import fitz
+                import pytesseract
+                from PIL import Image
+
+                with fitz.open(file_path) as pdf:
+                    for page_number in pages_needing_ocr:
+                        page = pdf[page_number - 1]
+                        pixmap = page.get_pixmap(
+                            matrix=fitz.Matrix(2, 2),
+                            alpha=False,
+                        )
+                        image = Image.frombytes(
+                            "RGB",
+                            (pixmap.width, pixmap.height),
+                            pixmap.samples,
+                        )
+                        page_text = pytesseract.image_to_string(image).strip()
+                        if page_text:
+                            ocr_pages.append(
+                                f"===== PAGE {page_number} OCR =====\n{page_text}"
+                            )
+
+            embedded_text = (
+                pdf_to_llm_text(parsed)
+                if any(
+                    page.get("text", "").strip()
+                    or any(
+                        cell.get("value", "").strip()
+                        for table in page.get("tables", [])
+                        for row in table.get("rows", [])
+                        for cell in row.get("cells", [])
+                    )
+                    for page in pages
+                )
+                else ""
+            )
+            return "\n".join(
+                part for part in (embedded_text, *ocr_pages) if part
+            )[:50000]
+        elif ext == ".docx":
+            from app.parsers.docx_parser import parse_docx_file, docx_to_llm_text
+
+            parsed = parse_docx_file(file_path)
+            has_content = bool(parsed["paragraphs"]) or any(
+                cell["text"]
+                for table in parsed["tables"]
+                for row in table["rows"]
+                for cell in row["cells"]
+            )
+            return docx_to_llm_text(parsed) if has_content else ""
+        elif ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}:
+            from app.parsers.image_parser import parse_image_file, image_to_llm_text
+
+            parsed = parse_image_file(file_path)
+            return image_to_llm_text(parsed) if parsed.get("full_text", "").strip() else ""
         return ""
+
+    @staticmethod
+    def _ai_source_content(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]:
+        """Return model input and parser-derived text segments with source coordinates."""
+        ext = file_path.suffix.lower()
+        segments: List[Dict[str, Any]] = []
+
+        if ext in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
+            from app.parsers.excel_parser import (
+                excel_to_llm_text,
+                parse_excel_file,
+            )
+
+            parsed = parse_excel_file(file_path)
+            for sheet in parsed["sheets"]:
+                for row in sheet["rows"]:
+                    for cell in row["cells"]:
+                        if cell["value"] is None:
+                            continue
+                        segments.append({
+                            "text": str(cell["value"]),
+                            "sheet": sheet["sheet_name"],
+                            "row": row["row_number"],
+                            "col": cell["column_letter"],
+                            "source_type": "excel_cell",
+                        })
+            return excel_to_llm_text(parsed), segments
+
+        if ext == ".xls":
+            import xlrd
+
+            workbook = xlrd.open_workbook(
+                file_path,
+                on_demand=True,
+            )
+            sheets = []
+            for sheet_index in range(workbook.nsheets):
+                sheet = workbook.sheet_by_index(sheet_index)
+                rows = []
+                for row_index in range(sheet.nrows):
+                    cells = []
+                    row_has_values = False
+                    for column_index in range(sheet.ncols):
+                        value = sheet.cell_value(row_index, column_index)
+                        if value == "":
+                            normalized_value = None
+                        elif sheet.cell_type(row_index, column_index) == xlrd.XL_CELL_DATE:
+                            normalized_value = xlrd.xldate_as_datetime(
+                                value,
+                                workbook.datemode,
+                            ).isoformat()
+                        elif isinstance(value, float) and value.is_integer():
+                            normalized_value = int(value)
+                        else:
+                            normalized_value = value
+                        if normalized_value is not None:
+                            row_has_values = True
+                            segments.append({
+                                "text": str(normalized_value),
+                                "sheet": sheet.name,
+                                "row": row_index + 1,
+                                "col": col_num_to_letter(column_index),
+                                "source_type": "excel_cell",
+                            })
+                        cells.append(
+                            f"COLUMN {col_num_to_letter(column_index)} "
+                            f"(index {column_index + 1}): {normalized_value}"
+                        )
+                    if row_has_values:
+                        rows.append(
+                            f"ROW {row_index + 1}: " + " | ".join(cells)
+                        )
+                sheets.append(
+                    f"===== SHEET: {sheet.name} =====\n"
+                    + "\n".join(rows)
+                )
+            workbook.release_resources()
+            return "\n".join(sheets)[:50000], segments
+
+        if ext in {".csv", ".tsv"}:
+            delimiter = "\t" if ext == ".tsv" else ","
+            with file_path.open("r", encoding="utf-8", errors="replace", newline="") as source_file:
+                rows = list(csv.reader(source_file, delimiter=delimiter))
+            for row_number, row in enumerate(rows, start=1):
+                for column_number, value in enumerate(row, start=1):
+                    if value:
+                        segments.append({
+                            "text": value,
+                            "sheet": "default",
+                            "row": row_number,
+                            "col": col_num_to_letter(column_number - 1),
+                            "source_type": "table_cell",
+                        })
+            return file_path.read_text(encoding="utf-8", errors="replace")[:50000], segments
+
+        if ext == ".docx":
+            from app.parsers.docx_parser import parse_docx_file, docx_to_llm_text
+
+            parsed = parse_docx_file(file_path)
+            for paragraph in parsed["paragraphs"]:
+                segments.append({
+                    "text": paragraph["text"],
+                    "paragraph": paragraph["paragraph_number"],
+                    "source_type": "paragraph",
+                })
+            for table in parsed["tables"]:
+                for row in table["rows"]:
+                    for cell in row["cells"]:
+                        if cell["text"]:
+                            segments.append({
+                                "text": cell["text"],
+                                "table": table["table_number"],
+                                "row": row["row_number"],
+                                "col": cell["column_position"],
+                                "source_type": "table_cell",
+                            })
+            return docx_to_llm_text(parsed)[:50000], segments
+
+        if ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}:
+            from app.parsers.image_parser import parse_image_file, image_to_llm_text
+
+            parsed = parse_image_file(file_path)
+            image = parsed["image"]
+            for row in parsed["rows"]:
+                cells = row["cells"]
+                if not cells:
+                    continue
+                left = min(cell["left"] for cell in cells)
+                top = min(cell["top"] for cell in cells)
+                right = max(cell["left"] + cell["width"] for cell in cells)
+                bottom = max(cell["top"] + cell["height"] for cell in cells)
+                segments.append({
+                    "text": " ".join(cell["text"] for cell in cells),
+                    "page": 1,
+                    "bbox": [left, top, right, bottom],
+                    "word_boxes": [
+                        {
+                            "text": cell["text"],
+                            "bbox": [
+                                cell["left"],
+                                cell["top"],
+                                cell["left"] + cell["width"],
+                                cell["top"] + cell["height"],
+                            ],
+                        }
+                        for cell in cells
+                    ],
+                    "page_width": image["width"],
+                    "page_height": image["height"],
+                    "source_type": "ocr_line",
+                    "ocr_confidence": sum(
+                        max(0.0, cell["confidence"]) / 100
+                        for cell in cells
+                    ) / len(cells),
+                })
+            return image_to_llm_text(parsed)[:50000], segments
+
+        if ext == ".pdf":
+            from app.parsers.pdf_parser import parse_pdf_file, pdf_to_llm_text
+
+            parsed = parse_pdf_file(file_path)
+            ocr_pages: List[str] = []
+            ocr_page_sizes: Dict[int, Tuple[int, int]] = {}
+            pages_needing_ocr = [
+                page["page_number"]
+                for page in parsed["pages"]
+            ]
+            ocr_words_by_page: Dict[int, List[Dict[str, Any]]] = {}
+            if pages_needing_ocr:
+                import fitz
+                import pytesseract
+                from PIL import Image
+                from pytesseract import Output
+
+                with fitz.open(file_path) as pdf:
+                    for page_number in pages_needing_ocr:
+                        page = pdf[page_number - 1]
+                        pixmap = page.get_pixmap(
+                            matrix=fitz.Matrix(2, 2),
+                            alpha=False,
+                        )
+                        ocr_page_sizes[page_number] = (
+                            pixmap.width,
+                            pixmap.height,
+                        )
+                        image = Image.frombytes(
+                            "RGB",
+                            (pixmap.width, pixmap.height),
+                            pixmap.samples,
+                        )
+                        data = pytesseract.image_to_data(
+                            image,
+                            output_type=Output.DICT,
+                        )
+                        words = []
+                        for index, raw_text in enumerate(data["text"]):
+                            word = str(raw_text).strip()
+                            if not word:
+                                continue
+                            try:
+                                confidence = float(data["conf"][index])
+                            except (TypeError, ValueError):
+                                confidence = 0.0
+                            words.append({
+                                "text": word,
+                                "left": int(data["left"][index]),
+                                "top": int(data["top"][index]),
+                                "width": int(data["width"][index]),
+                                "height": int(data["height"][index]),
+                                "line": (
+                                    data["block_num"][index],
+                                    data["par_num"][index],
+                                    data["line_num"][index],
+                                ),
+                                "confidence": confidence,
+                            })
+                        ocr_words_by_page[page_number] = words
+                        ocr_text = pytesseract.image_to_string(image).strip()
+                        if ocr_text:
+                            ocr_pages.append(
+                                f"===== PAGE {page_number} OCR =====\n{ocr_text}"
+                            )
+
+            for page in parsed["pages"]:
+                page_number = page["page_number"]
+                words = page.get("words", [])
+                grouped_words: List[List[Dict[str, Any]]] = []
+                for word in sorted(words, key=lambda item: (item["top"], item["x0"])):
+                    if not grouped_words or abs(
+                        word["top"] - grouped_words[-1][0]["top"]
+                    ) > 3:
+                        grouped_words.append([word])
+                    else:
+                        grouped_words[-1].append(word)
+                for line_words in grouped_words:
+                    segments.append({
+                        "text": " ".join(word["text"] for word in line_words),
+                        "page": page_number,
+                        "bbox": [
+                            min(word["x0"] for word in line_words),
+                            min(word["top"] for word in line_words),
+                            max(word["x1"] for word in line_words),
+                            max(word["bottom"] for word in line_words),
+                        ],
+                        "word_boxes": [
+                            {
+                                "text": word["text"],
+                                "bbox": [
+                                    word["x0"],
+                                    word["top"],
+                                    word["x1"],
+                                    word["bottom"],
+                                ],
+                            }
+                            for word in line_words
+                        ],
+                        "page_width": page["width"],
+                        "page_height": page["height"],
+                        "source_type": "pdf_text_line",
+                    })
+
+                if page_number in ocr_words_by_page:
+                    words = ocr_words_by_page[page_number]
+                    grouped: Dict[Tuple[int, int, int], List[Dict[str, Any]]] = {}
+                    for word in words:
+                        grouped.setdefault(word["line"], []).append(word)
+                    page_width = page["width"]
+                    page_height = page["height"]
+                    pix_width, pix_height = ocr_page_sizes[page_number]
+                    for line_words in grouped.values():
+                        left = min(word["left"] for word in line_words)
+                        top = min(word["top"] for word in line_words)
+                        right = max(word["left"] + word["width"] for word in line_words)
+                        bottom = max(word["top"] + word["height"] for word in line_words)
+                        segments.append({
+                            "text": " ".join(word["text"] for word in line_words),
+                            "page": page_number,
+                            "bbox": [
+                                left * page_width / pix_width,
+                                top * page_height / pix_height,
+                                right * page_width / pix_width,
+                                bottom * page_height / pix_height,
+                            ],
+                            "word_boxes": [
+                                {
+                                    "text": word["text"],
+                                    "bbox": [
+                                        word["left"] * page_width / pix_width,
+                                        word["top"] * page_height / pix_height,
+                                        (word["left"] + word["width"])
+                                        * page_width / pix_width,
+                                        (word["top"] + word["height"])
+                                        * page_height / pix_height,
+                                    ],
+                                }
+                                for word in line_words
+                            ],
+                            "page_width": page_width,
+                            "page_height": page_height,
+                            "source_type": "ocr_line",
+                            "ocr_confidence": sum(
+                                max(0.0, word["confidence"]) / 100
+                                for word in line_words
+                            ) / len(line_words),
+                        })
+
+            content = pdf_to_llm_text(parsed)
+            if ocr_pages:
+                content = f"{content}\n\n" + "\n\n".join(ocr_pages)
+            return content[:50000], segments
+
+        if ext == ".txt":
+            content = file_path.read_text(encoding="utf-8", errors="replace")[:50000]
+            for line_number, line in enumerate(content.splitlines(), start=1):
+                if line.strip():
+                    segments.append({
+                        "text": line.strip(),
+                        "line": line_number,
+                        "source_type": "text_line",
+                    })
+            return content, segments
+
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"AI extraction does not support {ext or 'this file type'}.",
+        )
+
+    @staticmethod
+    def _verify_ai_value(
+        value: Any,
+        segments: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Find an exact textual or numeric value in parser-derived source segments."""
+        if value is None or isinstance(value, bool):
+            return None
+
+        text_value = str(value).strip()
+        if not text_value:
+            return None
+
+        numeric_value: Optional[Decimal] = None
+        if isinstance(value, (int, float)):
+            try:
+                numeric_value = Decimal(str(value))
+            except InvalidOperation:
+                numeric_value = None
+
+        for segment in segments:
+            source_text = str(segment["text"])
+            matches = [
+                (match.start(), match.end(), match.group())
+                for match in re.finditer(re.escape(text_value), source_text)
+            ]
+            if numeric_value is not None:
+                for match in re.finditer(
+                    r"(?<![\w.])[-+]?\d+(?:\.\d+)?(?![\w.])",
+                    source_text,
+                ):
+                    try:
+                        if Decimal(match.group()) == numeric_value:
+                            matches.append(
+                                (match.start(), match.end(), match.group())
+                            )
+                    except InvalidOperation:
+                        continue
+
+            for match_start, match_end, matched_text in sorted(matches):
+                if match_start > 0 and re.match(
+                    r"[\w./-]",
+                    source_text[match_start - 1],
+                ):
+                    continue
+                if match_end < len(source_text) and re.match(
+                    r"[\w./-]",
+                    source_text[match_end],
+                ):
+                    continue
+
+                provenance = dict(segment)
+                provenance["text"] = matched_text
+                word_boxes = segment.get("word_boxes")
+                if word_boxes:
+                    character_offset = 0
+                    selected_boxes = []
+                    for word_box in word_boxes:
+                        word_start = character_offset
+                        word_end = word_start + len(word_box["text"])
+                        if word_start < match_end and word_end > match_start:
+                            selected_boxes.append(word_box["bbox"])
+                        character_offset = word_end + 1
+                    if selected_boxes:
+                        provenance["bbox"] = [
+                            min(box[0] for box in selected_boxes),
+                            min(box[1] for box in selected_boxes),
+                            max(box[2] for box in selected_boxes),
+                            max(box[3] for box in selected_boxes),
+                        ]
+                provenance.pop("word_boxes", None)
+                if segment.get("ocr_confidence") is not None:
+                    provenance["ocr_confidence"] = round(
+                        segment["ocr_confidence"],
+                        3,
+                    )
+                return provenance
+        return None
+
+    @staticmethod
+    def _ai_image_inputs(file_path: Path) -> List[Tuple[bytes, str]]:
+        ext = file_path.suffix.lower()
+        if ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}:
+            if ext in {".png", ".jpg", ".jpeg", ".webp"}:
+                mime_type = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                }.get(ext, f"image/{ext.lstrip('.')}")
+                return [(file_path.read_bytes(), mime_type)]
+
+            from PIL import Image
+
+            with Image.open(file_path) as image:
+                converted = image.convert("RGB")
+                output = io.BytesIO()
+                converted.save(output, format="PNG")
+                return [(output.getvalue(), "image/png")]
+
+        if ext == ".pdf":
+            import fitz
+
+            images = []
+            with fitz.open(file_path) as pdf:
+                for page in pdf:
+                    pixmap = page.get_pixmap(
+                        matrix=fitz.Matrix(1.5, 1.5),
+                        alpha=False,
+                    )
+                    images.append((pixmap.tobytes("png"), "image/png"))
+            return images
+
+        return []
 
     @staticmethod
     def extract_document(
@@ -552,7 +1023,6 @@ class ExtractionService:
                 db=db,
                 document_id=document_id,
                 model=model,
-                allow_fallback=True,
             )
 
         doc = db.execute(select(Document).where(Document.id == document_id)).scalar_one_or_none()
@@ -770,27 +1240,11 @@ class ExtractionService:
         db: Session,
         document_id: str,
         model: Optional[str] = None,
-        allow_fallback: bool = False,
     ) -> ExtractionJobResponse:
-        """Run AI LLM extraction on a document. Enforces 503 when Ollama offline (Problem 4)."""
-        from app.ai.chains import extract_records_with_llm
-        from app.ai.llm import ollama_client
+        """Run AI LLM extraction on a document."""
+        from app.ai.llm import llm_client
 
         target_model = model or settings.LLM_MODEL
-
-        # Problem 4: If Ollama offline, return 503 unless explicit fallback allowed
-        if not ollama_client.is_available():
-            if not allow_fallback:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="AI engine is not available",
-                )
-            fb = ExtractionService.extract_document(db, document_id)
-            fb.model_used = None
-            fb.fallback = True
-            fb.message = f"{fb.message} (Note: AI engine offline, used heuristic table extraction fallback)"
-            return fb
-
         doc = db.execute(select(Document).where(Document.id == document_id)).scalar_one_or_none()
         if not doc:
             raise HTTPException(
@@ -804,67 +1258,191 @@ class ExtractionService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Source file missing from disk storage.",
             )
+        if not llm_client.is_available(target_model):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="AI engine is not available",
+            )
 
+        from app.ai.chains import extract_records_with_llm
         doc.status = DocumentStatus.EXTRACTING.value
         db.commit()
 
-        text_content = ExtractionService.extract_document_text(file_path)
-        if not text_content.strip():
-            return ExtractionService.extract_document(db, document_id)
-
         try:
+            text_content, source_segments = ExtractionService._ai_source_content(
+                file_path
+            )
+            if not text_content.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="No readable text was found in the document for AI extraction.",
+                )
+
             ai_result = extract_records_with_llm(
                 text_content=text_content,
                 document_type=doc.document_type,
                 model=target_model,
                 source_file_name=doc.filename,
+                source_file_type=file_path.suffix.lower(),
+                image_inputs=ExtractionService._ai_image_inputs(file_path),
             )
             ai_records = [r.model_dump() for r in ai_result.records] if hasattr(ai_result, "records") else ai_result
+            if not ai_records:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="AI extraction returned no records.",
+                )
 
-            # Insert AI extracted records with audit
             for item in ai_records:
-                pn = item.get("part_number")
-                clean_pn = clean_part_number(pn) if pn else None
-                qty = parse_quantity_strict(item.get("quantity"))
-
-                orig_dict = {
-                    "part_number": pn,
-                    "cleaned_part_number": clean_pn,
-                    "model": clean_pn,
-                    "description": item.get("description"),
-                    "quantity": qty,
-                    "unit": item.get("unit"),
-                    "vendor": item.get("vendor"),
-                    "manufacturer": item.get("vendor"),
-                    "location": item.get("location"),
+                source_fields = {
+                    "equipment_name": "equipment_name",
+                    "part_number": "part_number",
+                    "serial_number": "serial_number",
+                    "description": "description",
+                    "model": "model",
+                    "manufacturer": "manufacturer",
+                    "vendor": "vendor",
+                    "condition": "condition",
+                    "condition_notes": "condition_notes",
+                    "quantity": "quantity",
+                    "unit": "unit",
+                    "location": "location",
+                    "rack": "rack",
+                    "rack_id": "rack_id",
+                    "u_position": "u_position",
+                    "source_device": "source_device",
+                    "source_port": "source_port",
+                    "target_device": "target_device",
+                    "target_port": "target_port",
+                    "cable_type": "cable_type",
+                    "length": "cable_length",
+                    "power_watts": "power_watts",
+                    "dimensions": "dimensions",
                 }
+                verified_values: Dict[str, Any] = {}
+                field_sources: Dict[str, Dict[str, Any]] = {}
+                unverified_fields: List[str] = []
+                candidate_count = 0
+                for ai_field, record_field in source_fields.items():
+                    value = item.get(ai_field)
+                    if value is None or value == "":
+                        continue
+                    candidate_count += 1
+                    provenance = ExtractionService._verify_ai_value(
+                        value,
+                        source_segments,
+                    )
+                    if provenance is None:
+                        unverified_fields.append(ai_field)
+                        continue
+                    verified_values[record_field] = value
+                    field_sources[record_field] = provenance
+
+                pn = verified_values.get("part_number")
+                clean_pn = clean_part_number(pn) if pn else None
+                verified_count = len(verified_values)
+                if clean_pn and "part_number" in field_sources:
+                    field_sources["cleaned_part_number"] = dict(
+                        field_sources["part_number"]
+                    )
+                qty = parse_quantity_strict(
+                    verified_values.get("quantity")
+                )
+                confidence = (
+                    verified_count / candidate_count
+                    if candidate_count
+                    else 0.0
+                )
+                review_reason = (
+                    "not_verbatim" if unverified_fields else None
+                )
+                orig_dict = {
+                    key: verified_values.get(key)
+                    for key in (
+                        "part_number",
+                        "equipment_name",
+                        "serial_number",
+                        "description",
+                        "model",
+                        "quantity",
+                        "unit",
+                        "vendor",
+                        "manufacturer",
+                        "condition",
+                        "condition_notes",
+                        "location",
+                        "rack",
+                        "u_position",
+                        "source_device",
+                        "source_port",
+                        "target_device",
+                        "target_port",
+                        "cable_type",
+                        "cable_length",
+                        "power_watts",
+                        "dimensions",
+                    )
+                }
+                orig_dict["cleaned_part_number"] = clean_pn
+                primary_source = (
+                    field_sources.get("part_number")
+                    or field_sources.get("description")
+                    or next(iter(field_sources.values()), {})
+                )
 
                 rec = ExtractedRecord(
                     id=generate_id("rec"),
                     project_id=doc.project_id,
                     document_id=doc.id,
-                    record_type=item.get("record_type", "bom_item"),
-                    category=item.get("category"),
+                    equipment_name=verified_values.get("equipment_name"),
+                    record_type=(
+                        "cable_item"
+                        if doc.document_type in {"p2p", "cable"}
+                        else "rack_item"
+                        if doc.document_type == "rack_layout"
+                        else "power_item"
+                        if doc.document_type == "power"
+                        else "bom_item"
+                    ),
+                    category=doc.document_type,
                     part_number=pn,
+                    serial_number=verified_values.get("serial_number"),
                     cleaned_part_number=clean_pn,
-                    model=clean_pn,
-                    description=item.get("description"),
+                    model=verified_values.get("model"),
+                    description=verified_values.get("description"),
                     quantity=qty,
-                    unit=item.get("unit"),
-                    vendor=item.get("vendor"),
-                    manufacturer=item.get("vendor"),
-                    location=item.get("location"),
-                    source_device=item.get("source_device"),
-                    source_port=item.get("source_port"),
-                    target_device=item.get("target_device"),
-                    target_port=item.get("target_port"),
-                    cable_type=item.get("cable_type"),
-                    confidence_score=item.get("confidence_score", 0.90),
-                    raw_data=item.get("raw_data"),
+                    unit=verified_values.get("unit"),
+                    vendor=verified_values.get("vendor"),
+                    manufacturer=verified_values.get("manufacturer"),
+                    condition=verified_values.get("condition"),
+                    condition_notes=verified_values.get("condition_notes"),
+                    location=verified_values.get("location"),
+                    rack=verified_values.get("rack"),
+                    rack_id=verified_values.get("rack_id"),
+                    u_position=verified_values.get("u_position"),
+                    source_device=verified_values.get("source_device"),
+                    source_port=verified_values.get("source_port"),
+                    target_device=verified_values.get("target_device"),
+                    target_port=verified_values.get("target_port"),
+                    cable_type=verified_values.get("cable_type"),
+                    cable_length=verified_values.get("cable_length"),
+                    power_watts=verified_values.get("power_watts"),
+                    dimensions=verified_values.get("dimensions"),
+                    confidence_score=confidence,
+                    raw_data={
+                        "unverified_fields": unverified_fields,
+                    },
                     original_values=orig_dict,
                     extraction_method="ai",
                     model_used=target_model,
-                    source_sheet="AI_Extracted",
+                    review_reason=review_reason,
+                    source_sheet=primary_source.get("sheet") or (
+                        f"Page_{primary_source['page']}"
+                        if primary_source.get("page") is not None
+                        else None
+                    ),
+                    source_row=primary_source.get("row"),
+                    field_sources=field_sources,
                     review_status=ReviewStatus.PENDING_REVIEW.value,
                     is_manually_added=False,
                     is_deleted=False,
@@ -884,24 +1462,106 @@ class ExtractionService:
                 message=f"Successfully extracted {len(ai_records)} records using {target_model}.",
                 fallback=False,
             )
-        except ConnectionError:
-            if not allow_fallback:
+        except HTTPException as exc:
+            db.rollback()
+            doc = db.get(Document, document_id)
+            if doc:
+                doc.status = DocumentStatus.FAILED.value
+                doc.error_message = str(exc.detail)
+            db.commit()
+            raise
+        except Exception as e:
+            db.rollback()
+            doc = db.get(Document, document_id)
+            if doc:
+                doc.status = DocumentStatus.FAILED.value
+                doc.error_message = f"AI extraction error: {str(e)}"
+            db.commit()
+            if not llm_client.is_available(target_model):
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="AI engine is not available",
-                )
-            fb = ExtractionService.extract_document(db, document_id)
-            fb.model_used = None
-            fb.fallback = True
-            return fb
-        except Exception as e:
-            doc.status = DocumentStatus.FAILED.value
-            doc.error_message = f"AI extraction error: {str(e)}"
-            db.commit()
+                ) from e
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"AI extraction failed: {str(e)}",
             )
+
+    @staticmethod
+    def queue_document_ai_extraction(
+        db: Session,
+        document_id: str,
+        background_tasks: BackgroundTasks,
+        model: Optional[str] = None,
+    ) -> ExtractionJobResponse:
+        from app.ai.llm import llm_client
+
+        target_model = model or settings.LLM_MODEL
+        doc = db.execute(
+            select(Document).where(Document.id == document_id)
+        ).scalar_one_or_none()
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document '{document_id}' not found.",
+            )
+        if not Path(doc.file_path).exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Source file missing from disk storage.",
+            )
+        if not llm_client.is_available(target_model):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="AI engine is not available",
+            )
+
+        doc.status = DocumentStatus.EXTRACTING.value
+        doc.error_message = None
+        db.commit()
+        background_tasks.add_task(
+            ExtractionService.run_background_ai_extraction,
+            document_id,
+            target_model,
+        )
+        return ExtractionJobResponse(
+            document_id=doc.id,
+            document_name=doc.filename,
+            status="queued",
+            records_extracted=0,
+            message="AI extraction queued.",
+            model_used=target_model,
+            fallback=False,
+        )
+
+    @staticmethod
+    def run_background_ai_extraction(
+        document_id: str,
+        model: Optional[str] = None,
+    ) -> None:
+        from app.core.database import SessionLocal
+
+        with SessionLocal() as db:
+            try:
+                ExtractionService.extract_document_with_ai(
+                    db,
+                    document_id,
+                    model=model,
+                )
+            except HTTPException as exc:
+                db.rollback()
+                doc = db.get(Document, document_id)
+                if doc:
+                    doc.status = DocumentStatus.FAILED.value
+                    doc.error_message = str(exc.detail)
+                    db.commit()
+            except Exception as exc:
+                db.rollback()
+                doc = db.get(Document, document_id)
+                if doc:
+                    doc.status = DocumentStatus.FAILED.value
+                    doc.error_message = f"AI extraction failed: {exc}"
+                    db.commit()
 
     @staticmethod
     def extract_raw_snippet_with_ai(
@@ -1254,20 +1914,30 @@ class ExtractionService:
 
         file_path = Path(doc.file_path)
         ext = file_path.suffix.lower()
+        field_sources = record.field_sources or {}
+        primary_source = (
+            field_sources.get("part_number")
+            or field_sources.get("description")
+            or next(iter(field_sources.values()), {})
+        )
 
         # Excel evidence
         if ext in [".xlsx", ".xls", ".xlsm"]:
             try:
                 import openpyxl
                 wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
-                sheet_name = record.source_sheet if record.source_sheet and record.source_sheet in wb.sheetnames else wb.sheetnames[0]
+                source_sheet = primary_source.get("sheet") or record.source_sheet
+                sheet_name = source_sheet if source_sheet in wb.sheetnames else wb.sheetnames[0]
                 sheet = wb[sheet_name]
                 all_rows = list(sheet.iter_rows(values_only=True))
                 wb.close()
 
-                target_row = record.source_row or 2
-                start_row = max(1, target_row - 5)
-                end_row = min(len(all_rows), target_row + 5)
+                target_row = primary_source.get("row") or record.source_row
+                if target_row is None and record.extraction_method != "ai":
+                    target_row = 2
+                context_row = target_row or 1
+                start_row = max(1, context_row - 5)
+                end_row = min(len(all_rows), context_row + 5)
 
                 headers = [str(c) if c is not None else "" for c in all_rows[0]] if all_rows else []
                 sliced_rows = [
@@ -1275,10 +1945,9 @@ class ExtractionService:
                     for row in all_rows[start_row - 1 : end_row]
                 ]
 
-                highlight_col = "A"
-                if record.field_sources and isinstance(record.field_sources, dict):
-                    if "part_number" in record.field_sources:
-                        highlight_col = record.field_sources["part_number"].get("col", "A")
+                highlight_col = primary_source.get("col")
+                if highlight_col is None and record.extraction_method != "ai":
+                    highlight_col = "A"
 
                 return {
                     "record_id": record.id,
@@ -1294,11 +1963,17 @@ class ExtractionService:
                         "highlight": {
                             "row": target_row,
                             "col": highlight_col,
+                            "text": primary_source.get("text"),
                         },
+                        "fieldSources": field_sources,
                     },
                 }
-            except Exception:
-                pass
+            except Exception as exc:
+                if record.extraction_method == "ai":
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Unable to load source evidence for the AI-extracted record.",
+                    ) from exc
 
         # CSV / TSV evidence
         if ext in [".csv", ".tsv"]:
@@ -1307,15 +1982,16 @@ class ExtractionService:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     reader = list(csv.reader(f, delimiter=sep))
                 headers = reader[0] if reader else []
-                target_row = record.source_row or 2
-                start_row = max(1, target_row - 5)
-                end_row = min(len(reader), target_row + 5)
+                target_row = primary_source.get("row") or record.source_row
+                if target_row is None and record.extraction_method != "ai":
+                    target_row = 2
+                start_row = max(1, (target_row or 1) - 5)
+                end_row = min(len(reader), (target_row or 1) + 5)
                 sliced_rows = reader[start_row - 1 : end_row]
 
-                highlight_col = "A"
-                if record.field_sources and isinstance(record.field_sources, dict):
-                    if "part_number" in record.field_sources:
-                        highlight_col = record.field_sources["part_number"].get("col", "A")
+                highlight_col = primary_source.get("col")
+                if highlight_col is None and record.extraction_method != "ai":
+                    highlight_col = "A"
 
                 return {
                     "record_id": record.id,
@@ -1331,14 +2007,43 @@ class ExtractionService:
                         "highlight": {
                             "row": target_row,
                             "col": highlight_col,
+                            "text": primary_source.get("text"),
                         },
+                        "fieldSources": field_sources,
                     },
                 }
-            except Exception:
-                pass
+            except Exception as exc:
+                if record.extraction_method == "ai":
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Unable to load source evidence for the AI-extracted record.",
+                    ) from exc
 
-        # PDF or Image evidence
+        if ext == ".docx":
+            return {
+                "record_id": record.id,
+                "document_id": doc.id,
+                "document_name": doc.filename,
+                "evidence_type": "text",
+                "evidence": {
+                    "type": "text",
+                    "source": primary_source,
+                    "fieldSources": field_sources,
+                },
+            }
+
         token = create_evidence_token(doc.id)
+        bbox = primary_source.get("bbox")
+        page_width = primary_source.get("page_width")
+        page_height = primary_source.get("page_height")
+        normalized_bbox = None
+        if bbox and page_width and page_height:
+            normalized_bbox = [
+                bbox[0] / page_width,
+                bbox[1] / page_height,
+                bbox[2] / page_width,
+                bbox[3] / page_height,
+            ]
         return {
             "record_id": record.id,
             "document_id": doc.id,
@@ -1347,11 +2052,13 @@ class ExtractionService:
             "evidence": {
                 "type": "image",
                 "imageUrl": f"/api/v1/documents/{doc.id}/evidence-image?token={token}",
-                "width": 2480,
-                "height": 3508,
-                "boundingBox": [0.1, 0.1, 0.9, 0.2],
-                "ocrText": record.description or record.part_number or "",
+                "width": page_width,
+                "height": page_height,
+                "page": primary_source.get("page"),
+                "boundingBox": normalized_bbox,
+                "ocrText": primary_source.get("text"),
                 "confidence": record.confidence_score,
+                "fieldSources": field_sources,
             },
         }
 

@@ -44,6 +44,7 @@ langchain-community
 # -------------------------
 # LLM
 # -------------------------
+google-genai
 openai
 httpx
 

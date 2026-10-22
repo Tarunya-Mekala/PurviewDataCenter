@@ -136,8 +136,11 @@ def test_cable_quantities_summary_problem_11(client):
     assert all(r["confidence_score"] >= 0.90 for r in items)
 
 
-def test_problem_4_ai_offline_503(client):
-    """Verify that AI extraction endpoints are removed (404 Not Found)."""
+def test_problem_4_ai_offline_503(client, monkeypatch):
+    """Verify unavailable AI is reported without falling back to table extraction."""
+    from app.ai.llm import llm_client
+
+    monkeypatch.setattr(llm_client, "is_available", lambda model=None: False)
     proj_res = client.post("/api/v1/projects", json={"name": "AI 503 Test"})
     project_id = proj_res.json()["id"]
 
@@ -145,13 +148,12 @@ def test_problem_4_ai_offline_503(client):
     upload_res = client.post(f"/api/v1/projects/{project_id}/documents", files=files)
     doc_id = upload_res.json()["successful"][0]["id"]
 
-    # extract-ai must return 404 (endpoint removed)
     ai_res = client.post(f"/api/v1/documents/{doc_id}/extract-ai")
-    assert ai_res.status_code == status.HTTP_404_NOT_FOUND
+    assert ai_res.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
 
-    # GET /ai/status must return 404 (endpoint removed)
     status_res = client.get("/api/v1/ai/status")
-    assert status_res.status_code == status.HTTP_404_NOT_FOUND
+    assert status_res.status_code == status.HTTP_200_OK
+    assert status_res.json()["available"] is False
 
 
 

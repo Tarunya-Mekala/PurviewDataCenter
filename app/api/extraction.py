@@ -2,8 +2,10 @@ from typing import List
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     Query,
+    Response,
     status,
 )
 
@@ -45,10 +47,17 @@ def get_ai_status(
 ):
 
     from app.core.config import settings
+    from app.ai.llm import llm_client
+
+    available = llm_client.is_available()
 
     return {
 
-        "status": "online",
+        "status": "online" if available else "offline",
+
+        "available": available,
+
+        "reachable": available,
 
         "provider": (
             settings.LLM_PROVIDER
@@ -74,6 +83,10 @@ def extract_document(
 
     document_id: str,
 
+    background_tasks: BackgroundTasks,
+
+    response: Response,
+
     use_ai: bool = Query(
         False,
         description=(
@@ -96,20 +109,26 @@ def extract_document(
     ),
 ):
 
-    return (
-        ExtractionService
-        .extract_document_with_ai(
+    if use_ai:
+        response.status_code = status.HTTP_202_ACCEPTED
+        return ExtractionService.queue_document_ai_extraction(
             db,
             document_id,
+            background_tasks,
             model=model,
         )
+    return ExtractionService.extract_document(
+        db,
+        document_id,
+        use_ai=False,
+        model=model,
     )
 
 
 @router.post(
     "/documents/{document_id}/extract-ai",
     response_model=ExtractionJobResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=status.HTTP_202_ACCEPTED,
     summary=(
         "Extract category-specific "
         "structured records"
@@ -125,6 +144,8 @@ def extract_document_ai(
 
     document_id: str,
 
+    background_tasks: BackgroundTasks,
+
     db: Session = Depends(get_db),
 
     current_user: User = Depends(
@@ -134,9 +155,10 @@ def extract_document_ai(
 
     return (
         ExtractionService
-        .extract_document_with_ai(
+        .queue_document_ai_extraction(
             db,
             document_id,
+            background_tasks,
         )
     )
 

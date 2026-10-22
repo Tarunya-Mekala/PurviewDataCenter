@@ -41,6 +41,8 @@ class CanonicalInventoryRecord(BaseModel):
 
     part_number: Optional[str] = None
 
+    serial_number: Optional[str] = None
+
     description: Optional[str] = None
 
     model: Optional[str] = None
@@ -49,12 +51,20 @@ class CanonicalInventoryRecord(BaseModel):
 
     vendor: Optional[str] = None
 
+    condition: Optional[str] = None
+
+    condition_notes: Optional[str] = None
+
     quantity: Optional[float] = Field(
         default=None,
         ge=0
     )
 
     unit: Optional[str] = None
+
+    location: Optional[str] = None
+
+    rack: Optional[str] = None
 
     rack_id: Optional[str] = None
 
