@@ -324,6 +324,23 @@ class ExtractionService:
         The part number is the column heading (row 2); creates one line per serial with
         part_number = that column's part number and serial_number = the cell.
         """
+        # A serial matrix sheet must explicitly mention "serial" in header area (top 25 rows)
+        max_r_scan = min(getattr(sheet, "max_row", 25) or 25, 25)
+        max_c_scan = min(getattr(sheet, "max_column", 40) or 40, 40)
+        has_serial_keyword = False
+        for r in range(1, max_r_scan + 1):
+            for c in range(1, max_c_scan + 1):
+                v = sheet.cell(r, c).value
+                if v and "serial" in str(v).lower():
+                    has_serial_keyword = True
+                    break
+            if has_serial_keyword:
+                break
+
+        if not has_serial_keyword:
+            return []
+
+        invalid_pn = {"quantity", "qty", "count", "description", "item", "unit", "total", "rack", "status", "serial", "serial number", "cable part number"}
         pn_blocks = []
         max_r = min(getattr(sheet, "max_row", 20) or 20, 10)
         max_c = getattr(sheet, "max_column", 40) or 40
@@ -336,8 +353,10 @@ class ExtractionService:
                     for c2 in range(c + 1, min(max_c + 1, c + 5)):
                         v2 = sheet.cell(r, c2).value
                         if v2 and str(v2).strip():
-                            pn_val = str(v2).strip()
-                            break
+                            cand = str(v2).strip()
+                            if cand.lower() not in invalid_pn:
+                                pn_val = cand
+                                break
                     if pn_val:
                         pn_blocks.append((r, c, pn_val))
 
@@ -348,11 +367,11 @@ class ExtractionService:
         total_r = getattr(sheet, "max_row", 1200) or 1200
         for r_pn, c_pn, pn in pn_blocks:
             clean_pn = clean_part_number(pn)
-            s_col = c_pn
-            s_row = r_pn + 2
+            s_col = None
+            s_row = None
             desc = None
 
-            for r_scan in range(r_pn + 1, min(total_r + 1, r_pn + 8)):
+            for r_scan in range(r_pn + 1, min(total_r + 1, r_pn + 12)):
                 for c_scan in range(max(1, c_pn - 2), min(max_c + 1, c_pn + 5)):
                     cv = sheet.cell(r_scan, c_scan).value
                     if cv:
@@ -362,6 +381,9 @@ class ExtractionService:
                             s_row = r_scan + 1
                         elif len(cv_str) > 20 and not desc:
                             desc = cv_str
+
+            if not s_col or not s_row:
+                continue
 
             col_letter = col_num_to_letter(s_col - 1)
             for r in range(s_row, total_r + 1):

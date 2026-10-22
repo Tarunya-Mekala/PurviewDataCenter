@@ -93,7 +93,7 @@ class ReportService:
         # Safe filename
         safe_base = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in doc.filename)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-        filename = f"extracted_{safe_base}_{timestamp}.xlsx"
+        filename = f"Extracted_lines_-_internal_data_export_{safe_base}_{timestamp}.xlsx"
 
         return output.getvalue(), filename
 
@@ -146,7 +146,7 @@ class ReportService:
 
         safe_base = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in project.name)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-        filename = f"project_records_{safe_base}_{timestamp}.xlsx"
+        filename = f"Extracted_lines_-_internal_data_export_{safe_base}_{timestamp}.xlsx"
 
         try:
             from app.api.audit import record_audit_log
@@ -380,7 +380,7 @@ class ReportService:
         # Title Banner
         ws.merge_cells("A1:D1")
         title_cell = ws["A1"]
-        title_cell.value = f"Extraction Overview: {doc.filename}"
+        title_cell.value = f"Extracted lines – internal data export (Extraction Overview): {doc.filename}"
         title_cell.font = title_font
         title_cell.alignment = Alignment(vertical="center")
         ws.row_dimensions[1].height = 32
@@ -604,7 +604,7 @@ class ReportService:
 
         ws.merge_cells("A1:C1")
         title_cell = ws["A1"]
-        title_cell.value = f"Project Summary: {project.name}"
+        title_cell.value = f"Extracted lines – internal data export (Project Summary): {project.name}"
         title_cell.font = title_font
         ws.row_dimensions[1].height = 32
 
@@ -848,10 +848,16 @@ class ReportService:
             else 0.0
         )
 
-        # Download URL with optional token
-        download_url = f"/api/v1/documents/{document_id}/excel"
+        # Download button with short-lived signed link if token provided, otherwise omit
+        download_btn_html = ""
         if token:
-            download_url += f"?token={token}"
+            download_url = f"/api/v1/documents/{document_id}/excel?token={token}"
+            download_btn_html = f"""
+            <a href="{download_url}" download class="btn btn-white" id="download-excel-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download .xlsx
+            </a>
+            """
 
         # Generate rows HTML
         rows_html = []
@@ -892,7 +898,7 @@ class ReportService:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Excel View: {html.escape(doc.filename)}</title>
+    <title>Extracted lines – internal data export: {html.escape(doc.filename)}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -1294,15 +1300,12 @@ class ReportService:
         <div class="ribbon-brand">
             <div class="excel-icon">X</div>
             <div class="ribbon-title">
-                <h1>{html.escape(doc.filename)}</h1>
-                <span>Document ID: {html.escape(doc.id)} &bull; Type: {html.escape(doc.document_type.upper())}</span>
+                <h1>Extracted lines – internal data export</h1>
+                <span>Document: {html.escape(doc.filename)} &bull; ID: {html.escape(doc.id)} &bull; Type: {html.escape(doc.document_type.upper())}</span>
             </div>
         </div>
         <div class="ribbon-actions">
-            <a href="{download_url}" download class="btn btn-white" id="download-excel-btn">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Download .xlsx
-            </a>
+            {download_btn_html}
             <button onclick="window.print()" class="btn btn-ghost">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                 Print
@@ -1524,9 +1527,15 @@ class ReportService:
             else 0.0
         )
 
-        download_url = f"/api/v1/projects/{project_id}/excel"
+        download_btn_html = ""
         if token:
-            download_url += f"?token={token}"
+            download_url = f"/api/v1/projects/{project_id}/excel?token={token}"
+            download_btn_html = f"""
+            <a href="{download_url}" download class="btn btn-white" id="download-excel-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download Project .xlsx
+            </a>
+            """
 
         rows_html = []
         for idx, r in enumerate(records, start=1):
@@ -1565,7 +1574,7 @@ class ReportService:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Excel View: {html.escape(project.name)}</title>
+    <title>Extracted lines – internal data export: {html.escape(project.name)}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -1666,15 +1675,12 @@ class ReportService:
         <div class="ribbon-brand">
             <div class="excel-icon">X</div>
             <div class="ribbon-title">
-                <h1>{html.escape(project.name)}</h1>
-                <span>Consolidated Project Records &bull; ID: {html.escape(project.id)}</span>
+                <h1>Extracted lines – internal data export</h1>
+                <span>Project: {html.escape(project.name)} &bull; Consolidated Project Records &bull; ID: {html.escape(project.id)}</span>
             </div>
         </div>
         <div>
-            <a href="{download_url}" download class="btn btn-white">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Download Project .xlsx
-            </a>
+            {download_btn_html}
         </div>
     </header>
 

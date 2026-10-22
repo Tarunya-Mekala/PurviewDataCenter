@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     EXTRACTED_DIR: str = str(BASE_DIR / "data" / "extracted")
     PROCESSED_DIR: str = str(BASE_DIR / "data" / "processed")
     REPORT_DIR: str = str(BASE_DIR / "data" / "reports")
+    BACKUP_DIR: str = str(BASE_DIR / "data" / "backups")
+
+    # Retention period (in days) for stored export files (7 years = 2555 days for audit & dispute compliance)
+    EXPORT_RETENTION_DAYS: int = 2555
 
     MAX_UPLOAD_SIZE_MB: Optional[int] = None
 

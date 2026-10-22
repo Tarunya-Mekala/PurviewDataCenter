@@ -8,6 +8,7 @@ class ExportCreateRequest(BaseModel):
     vendor_id: Optional[str] = None
     file_name: Optional[str] = None
     line_count: Optional[int] = 0
+    run_id: Optional[str] = None
 
 
 class ExportRecordResponse(BaseModel):
@@ -18,6 +19,10 @@ class ExportRecordResponse(BaseModel):
     export_type: str
     vendor_id: Optional[str] = None
     file_name: str
+    file_path: Optional[str] = None
+    checksum_sha256: Optional[str] = None
+    fingerprint: Optional[str] = None
+    run_id: Optional[str] = None
     line_count: int
     created_by: Optional[str] = None
     created_at: datetime
@@ -26,6 +31,8 @@ class ExportRecordResponse(BaseModel):
     def model_post_init(self, __context):
         if not self.type:
             self.type = self.export_type
+        if not self.fingerprint and self.checksum_sha256:
+            self.fingerprint = self.checksum_sha256
 
 
 class ExportRecordListResponse(BaseModel):

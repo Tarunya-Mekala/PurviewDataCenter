@@ -2,7 +2,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from fastapi import HTTPException, UploadFile, status
 
@@ -93,11 +93,11 @@ def detect_document_type(filename: str) -> DocumentType:
     return DocumentType.OTHER
 
 
-def get_mime_type_for_file(file_path: Path) -> str:
+def get_mime_type_for_file(file_path: Union[Path, str]) -> str:
     """
     Get appropriate MIME type for download streaming.
     """
-    ext = file_path.suffix.lower()
+    ext = Path(file_path).suffix.lower()
     return EXTENSION_MIME_MAP.get(ext, "application/octet-stream")
 
 

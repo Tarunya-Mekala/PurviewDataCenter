@@ -36,6 +36,19 @@ class ExportRecord(Base):
         String(255),
         nullable=False,
     )
+    file_path: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    checksum_sha256: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
     line_count: Mapped[int] = mapped_column(
         Integer,
         default=0,

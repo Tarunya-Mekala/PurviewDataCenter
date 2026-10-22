@@ -5,9 +5,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_super_admin
+from app.core.security import require_reviewer_or_admin, require_viewer_or_above
 from app.models.document import Document
 from app.models.project import Project
+from app.models.user import User
 from app.models.vendor import Vendor
 from app.schemas.vendor import (
     VendorContactUpdate,
@@ -20,7 +21,6 @@ from app.utils.id_generator import generate_id
 
 router = APIRouter(
     tags=["Vendors"],
-    dependencies=[Depends(get_current_super_admin)],
 )
 
 
@@ -28,10 +28,11 @@ router = APIRouter(
     "/vendors",
     response_model=VendorListResponse,
     summary="List all vendors directory",
-    description="Retrieve all registered vendor contacts across projects.",
+    description="Retrieve all registered vendor contacts across projects. Viewers permitted.",
 )
 def list_all_vendors(
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_viewer_or_above),
 ):
     stmt = select(Vendor).order_by(Vendor.name.asc())
     vendors = db.execute(stmt).scalars().all()
@@ -45,11 +46,12 @@ def list_all_vendors(
     "/projects/{project_id}/vendors",
     response_model=VendorListResponse,
     summary="List all vendors for a project",
-    description="Retrieve all registered vendors/suppliers delivering equipment for this project.",
+    description="Retrieve all registered vendors/suppliers delivering equipment for this project. Viewers permitted.",
 )
 def list_project_vendors(
     project_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_viewer_or_above),
 ):
     project = db.get(Project, project_id)
     if not project:
@@ -68,12 +70,13 @@ def list_project_vendors(
     response_model=VendorResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new vendor for a project",
-    description="Register a new supplier for project deliveries.",
+    description="Register a new supplier for project deliveries. Reviewer and admin only.",
 )
 def create_project_vendor(
     project_id: str,
     vendor_in: VendorCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_reviewer_or_admin),
 ):
     project = db.get(Project, project_id)
     if not project:
@@ -97,12 +100,13 @@ def create_project_vendor(
     "/vendors/{vendor_id}",
     response_model=VendorResponse,
     summary="Update vendor details",
-    description="Modify the supplier name and contact details.",
+    description="Modify the supplier name and contact details. Reviewer and admin only.",
 )
 def update_vendor(
     vendor_id: str,
     vendor_in: VendorUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_reviewer_or_admin),
 ):
     vendor = db.get(Vendor, vendor_id)
     if not vendor:
@@ -125,12 +129,13 @@ def update_vendor(
     "/vendors/{vendor_id}/contact",
     response_model=VendorResponse,
     summary="Update vendor contact information",
-    description="Update contact person, email, and phone for a vendor.",
+    description="Update contact person, email, and phone for a vendor. Reviewer and admin only.",
 )
 def update_vendor_contact(
     vendor_id: str,
     contact_in: VendorContactUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_reviewer_or_admin),
 ):
     vendor = db.get(Vendor, vendor_id)
     if not vendor:
@@ -152,11 +157,12 @@ def update_vendor_contact(
     "/vendors/{vendor_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete vendor and its documents",
-    description="Delete a vendor and automatically remove all documents associated with that vendor.",
+    description="Delete a vendor and automatically remove all documents associated with that vendor. Reviewer and admin only.",
 )
 def delete_vendor(
     vendor_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_reviewer_or_admin),
 ):
     vendor = db.get(Vendor, vendor_id)
     if not vendor:

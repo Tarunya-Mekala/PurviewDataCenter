@@ -942,8 +942,14 @@ def run_seed():
             },
         ]
 
+        valid_cols = {c.name for c in ExtractedRecord.__table__.columns}
         for r_data in records_data:
-            rec = ExtractedRecord(**r_data)
+            if "equipment_name" in r_data and "description" not in r_data:
+                r_data["description"] = r_data["equipment_name"]
+            if "rack_id" in r_data and "rack" not in r_data:
+                r_data["rack"] = r_data["rack_id"]
+            filtered_data = {k: v for k, v in r_data.items() if k in valid_cols}
+            rec = ExtractedRecord(**filtered_data)
             db.add(rec)
         db.commit()
         print(f"  -> Extracted records seeded: {len(records_data)}")

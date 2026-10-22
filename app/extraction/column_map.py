@@ -41,7 +41,9 @@ COLUMN_SYNONYMS: Dict[str, List[str]] = {
         "manufacturer", "mfg", "brand", "make"
     ],
     "vendor": [
-        "vendor", "supplier"
+        "vendor", "supplier", "vendor name", "supplier name", "vendor / supplier",
+        "po vendor", "po supplier", "po / supplier", "po/supplier",
+        "po", "po #", "po#", "po number", "po no", "purchase order", "purchase order #", "po ref"
     ],
     "power_kw": [
         "power kw", "power (kw)", "kw", "power", "power consumption"

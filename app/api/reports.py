@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
@@ -5,7 +6,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_super_admin_flexible
+from app.core.security import create_access_token, require_reviewer_or_admin_flexible
 from app.models.user import User
 from app.schemas.record import ExcelGridPreviewResponse
 from app.services.report_service import ReportService
@@ -13,6 +14,19 @@ from app.services.report_service import ReportService
 router = APIRouter(tags=["Reports & Excel Export"])
 
 EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _generate_download_token(user: User) -> str:
+    """Generate a 15-minute signed token for direct browser file download links."""
+    return create_access_token(
+        data={
+            "sub": user.id,
+            "email": user.email,
+            "role": user.role,
+            "is_super_admin": user.is_super_admin,
+        },
+        expires_delta=timedelta(minutes=15),
+    )
 
 
 # ------------------------------------------------------------------
@@ -41,11 +55,12 @@ def export_document_excel(
     token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser access"),
     accept: Optional[str] = Header(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin_flexible),
+    current_user: User = Depends(require_reviewer_or_admin_flexible),
 ):
     # Check if caller wants the interactive web view
     if view == "html" or (accept and "text/html" in accept and "application" not in accept):
-        html_content = ReportService.render_excel_html_view(db, document_id, token=token)
+        signed_token = _generate_download_token(current_user)
+        html_content = ReportService.render_excel_html_view(db, document_id, token=signed_token)
         return HTMLResponse(content=html_content, status_code=200)
 
     excel_bytes, filename = ReportService.generate_document_excel(db, document_id)
@@ -70,12 +85,10 @@ def view_document_excel_html(
     document_id: str,
     token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser links"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin_flexible),
+    current_user: User = Depends(require_reviewer_or_admin_flexible),
 ):
-    if not token and current_user:
-        from app.core.security import create_access_token
-        token = create_access_token(data={"sub": current_user.id, "email": current_user.email, "role": current_user.role, "is_super_admin": current_user.is_super_admin})
-    html_content = ReportService.render_excel_html_view(db, document_id, token=token)
+    signed_token = _generate_download_token(current_user)
+    html_content = ReportService.render_excel_html_view(db, document_id, token=signed_token)
     return HTMLResponse(content=html_content, status_code=200)
 
 
@@ -89,7 +102,7 @@ def view_document_excel_html(
 def preview_document_excel_json(
     document_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin_flexible),
+    current_user: User = Depends(require_reviewer_or_admin_flexible),
 ):
     return ReportService.get_document_excel_preview(db, document_id)
 
@@ -120,13 +133,11 @@ def export_project_excel(
     token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser access"),
     accept: Optional[str] = Header(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin_flexible),
+    current_user: User = Depends(require_reviewer_or_admin_flexible),
 ):
     if view == "html" or (accept and "text/html" in accept and "application" not in accept):
-        if not token and current_user:
-            from app.core.security import create_access_token
-            token = create_access_token(data={"sub": current_user.id, "email": current_user.email, "role": current_user.role, "is_super_admin": current_user.is_super_admin})
-        html_content = ReportService.render_project_excel_html_view(db, project_id, token=token)
+        signed_token = _generate_download_token(current_user)
+        html_content = ReportService.render_project_excel_html_view(db, project_id, token=signed_token)
         return HTMLResponse(content=html_content, status_code=200)
 
     excel_bytes, filename = ReportService.generate_project_excel(db, project_id)
@@ -151,12 +162,10 @@ def view_project_excel_html(
     project_id: str,
     token: Optional[str] = Query(None, description="Optional JWT authentication token for direct browser links"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin_flexible),
+    current_user: User = Depends(require_reviewer_or_admin_flexible),
 ):
-    if not token and current_user:
-        from app.core.security import create_access_token
-        token = create_access_token(data={"sub": current_user.id, "email": current_user.email, "role": current_user.role, "is_super_admin": current_user.is_super_admin})
-    html_content = ReportService.render_project_excel_html_view(db, project_id, token=token)
+    signed_token = _generate_download_token(current_user)
+    html_content = ReportService.render_project_excel_html_view(db, project_id, token=signed_token)
     return HTMLResponse(content=html_content, status_code=200)
 
 
@@ -170,6 +179,7 @@ def view_project_excel_html(
 def preview_project_excel_json(
     project_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin_flexible),
+    current_user: User = Depends(require_reviewer_or_admin_flexible),
 ):
     return ReportService.get_project_excel_preview(db, project_id)
+

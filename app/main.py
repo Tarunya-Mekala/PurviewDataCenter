@@ -17,6 +17,7 @@ async def lifespan(app: FastAPI):
         settings.EXTRACTED_DIR,
         settings.PROCESSED_DIR,
         settings.REPORT_DIR,
+        str(Path(settings.REPORT_DIR) / "exports"),
     ]:
         Path(directory).mkdir(parents=True, exist_ok=True)
 
@@ -28,6 +29,20 @@ async def lifespan(app: FastAPI):
         command.upgrade(alembic_cfg, "head")
     except Exception as e:
         print(f"Alembic startup migration note: {e}")
+
+    # Ensure export_records and comparison_runs schema contains all required columns
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE export_records ADD COLUMN IF NOT EXISTS file_path VARCHAR(500)"))
+            conn.execute(text("ALTER TABLE export_records ADD COLUMN IF NOT EXISTS checksum_sha256 VARCHAR(64)"))
+            conn.execute(text("ALTER TABLE export_records ADD COLUMN IF NOT EXISTS run_id VARCHAR(64)"))
+            conn.execute(text("ALTER TABLE comparison_runs ADD COLUMN IF NOT EXISTS created_by VARCHAR(255)"))
+            conn.execute(text("ALTER TABLE comparison_runs ADD COLUMN IF NOT EXISTS document_versions JSON"))
+            conn.execute(text("ALTER TABLE comparison_runs ADD COLUMN IF NOT EXISTS is_frozen BOOLEAN DEFAULT TRUE"))
+            conn.commit()
+    except Exception:
+        pass
 
     # Create tables and seed initial Super Admin
     try:
@@ -137,6 +152,10 @@ app.add_middleware(
 
 # Include v1 API routes
 app.include_router(api_router)
+
+# Root export file download alias
+from app.api.exports import get_export_file
+app.add_api_route("/exports/{export_id}/file", get_export_file, methods=["GET"], include_in_schema=False)
 
 
 def patch_property_for_swagger_files(prop):

@@ -93,12 +93,21 @@ def extract_document(
     ),
 ):
 
+    if model:
+        return (
+            ExtractionService
+            .extract_document_with_ai(
+                db,
+                document_id,
+                model=model,
+                allow_fallback=True,
+            )
+        )
     return (
         ExtractionService
-        .extract_document_with_ai(
+        .extract_document(
             db,
             document_id,
-            model=model,
         )
     )
 
@@ -163,33 +172,6 @@ def get_document_extraction_status(
     )
 
 
-@router.post(
-    "/extract/ai-snippet",
-    summary="Extract records from raw text",
-)
-def extract_snippet_ai(
-
-    request: RawTextExtractionRequest,
-
-    current_user: User = Depends(
-        get_current_super_admin
-    ),
-):
-
-    return (
-        ExtractionService
-        .extract_raw_snippet_with_ai(
-
-            text=request.text,
-
-            document_type=(
-                request.document_type
-                or "bom"
-            ),
-
-            model=request.model,
-        )
-    )
 
 
 @router.post(
@@ -197,7 +179,7 @@ def extract_snippet_ai(
     response_model=List[
         ExtractionJobResponse
     ],
-    status_code=status.HTTP_200_OK,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Extract all project documents",
 )
 def extract_all_documents(

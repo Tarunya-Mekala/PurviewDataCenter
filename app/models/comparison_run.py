@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
-from typing import Optional, TYPE_CHECKING
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from typing import Any, Optional, TYPE_CHECKING
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.utils.id_generator import generate_id
@@ -75,6 +75,19 @@ class ComparisonRun(Base):
     finished_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    created_by: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    document_versions: Mapped[Optional[Any]] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+    is_frozen: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
     )
 
     project: Mapped["Project"] = relationship(

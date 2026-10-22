@@ -75,6 +75,7 @@ class OllamaClient:
 
 
 ollama_client = OllamaClient()
+llm_client = ollama_client
 
 
 def get_llm():

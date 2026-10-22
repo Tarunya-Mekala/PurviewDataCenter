@@ -1,23 +1,20 @@
-"""Comparison, reconciliation, results, issue groups, and runs endpoints."""
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_super_admin
+from app.core.security import require_reviewer_or_admin, require_viewer_or_above
 from app.models.user import User
 from app.schemas.comparison import (
     ComparisonResponse,
     ComparisonResultsListResponse,
     ComparisonRunListResponse,
+    ComparisonRunResponse,
     IssueGroupListResponse,
 )
 from app.services.comparison_service import ComparisonService
 
-router = APIRouter(
-    tags=["Comparison & Reconciliation"],
-    dependencies=[Depends(get_current_super_admin)],
-)
+router = APIRouter(tags=["Comparison & Reconciliation"])
 
 
 @router.post(
@@ -25,14 +22,14 @@ router = APIRouter(
     response_model=ComparisonResponse,
     status_code=status.HTTP_200_OK,
     summary="Execute comparison run (Plan vs Vendor Delivery)",
-    description="Deterministic comparison comparing approved plan records with approved vendor delivery records. Persists run history, results, and issue groups.",
+    description="Deterministic comparison comparing approved plan records with approved vendor delivery records. Persists run history, results, and issue groups as an immutable frozen run. Reviewer and admin only.",
 )
 def execute_comparison(
     project_id: str,
     rack: Optional[str] = Query(None, description="Optional rack filter"),
     vendor_id: Optional[str] = Query(None, description="Optional vendor filter"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_reviewer_or_admin),
 ):
     return ComparisonService.compare_project(
         db=db,
@@ -40,6 +37,7 @@ def execute_comparison(
         rack=rack,
         vendor_id=vendor_id,
         persist_run=True,
+        created_by=current_user.email if hasattr(current_user, "email") else str(current_user.id),
     )
 
 
@@ -53,15 +51,25 @@ def compare_plan_and_vendor(
     project_id: str,
     rack: Optional[str] = Query(None, description="Filter comparison by specific rack (e.g. Rack-A01)"),
     vendor_id: Optional[str] = Query(None, description="Filter comparison by specific vendor"),
+    run_id: Optional[str] = Query(None, description="Optional run ID to retrieve results from an existing frozen run"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_viewer_or_above),
 ):
+    if run_id:
+        return ComparisonService.get_run_report(
+            db=db,
+            project_id=project_id,
+            run_id=run_id,
+            rack=rack,
+            vendor_id=vendor_id,
+        )
     return ComparisonService.compare_project(
         db=db,
         project_id=project_id,
         rack=rack,
         vendor_id=vendor_id,
         persist_run=True,
+        created_by=current_user.email if hasattr(current_user, "email") else str(current_user.id),
     )
 
 
@@ -69,10 +77,11 @@ def compare_plan_and_vendor(
     "/projects/{project_id}/results",
     response_model=ComparisonResultsListResponse,
     summary="List granular comparison results",
-    description="Retrieve line-by-line comparison result lines with support for grouping (issue, rack, vendor), status filtering, and search.",
+    description="Retrieve line-by-line comparison result lines with support for grouping (issue, rack, vendor), status filtering, and search. Viewers permitted (read-only).",
 )
 def get_comparison_results(
     project_id: str,
+    run_id: Optional[str] = Query(None, description="Optional run ID to view results from a specific frozen run"),
     group_by: Optional[str] = Query(None, description="Group results by: 'issue', 'rack', or 'vendor'"),
     result: Optional[str] = Query(None, description="Filter by result status: 'match', 'discrepancy', 'exception'"),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor ID"),
@@ -81,11 +90,12 @@ def get_comparison_results(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=500, description="Page size"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_viewer_or_above),
 ):
     return ComparisonService.get_results(
         db=db,
         project_id=project_id,
+        run_id=run_id,
         group_by=group_by,
         result=result,
         vendor_id=vendor_id,
@@ -100,13 +110,13 @@ def get_comparison_results(
     "/projects/{project_id}/issue-groups",
     response_model=IssueGroupListResponse,
     summary="List comparison issue groups",
-    description="Get summarized issue clusters grouping discrepancies and exceptions by cause, vendor, and equipment category.",
+    description="Get summarized issue clusters grouping discrepancies and exceptions by cause, vendor, and equipment category. Viewers permitted (read-only).",
 )
 def get_issue_groups(
     project_id: str,
     run_id: Optional[str] = Query(None, description="Optional run ID filter"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_viewer_or_above),
 ):
     return ComparisonService.get_issue_groups(
         db=db,
@@ -119,11 +129,50 @@ def get_issue_groups(
     "/projects/{project_id}/runs",
     response_model=ComparisonRunListResponse,
     summary="List comparison runs history",
-    description="Retrieve all historical comparison runs for this project.",
+    description="Retrieve all historical comparison runs for this project. Viewers permitted (read-only).",
 )
 def get_comparison_runs(
     project_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_viewer_or_above),
 ):
     return ComparisonService.get_runs(db=db, project_id=project_id)
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}",
+    response_model=ComparisonRunResponse,
+    summary="Get details of a frozen comparison run",
+    description="Retrieve metadata, summary metrics, document versions used, and author for a frozen comparison run. Viewers permitted (read-only).",
+)
+def get_comparison_run(
+    project_id: str,
+    run_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_viewer_or_above),
+):
+    return ComparisonService.get_run(db=db, project_id=project_id, run_id=run_id)
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/report",
+    response_model=ComparisonResponse,
+    summary="Rebuild or view full comparison report from a frozen run",
+    description="Reconstructs the full comparison report (summary and items) exactly as frozen in the specified run. Viewers permitted (read-only).",
+)
+def get_frozen_run_report(
+    project_id: str,
+    run_id: str,
+    rack: Optional[str] = Query(None, description="Optional rack filter"),
+    vendor_id: Optional[str] = Query(None, description="Optional vendor filter"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_viewer_or_above),
+):
+    return ComparisonService.get_run_report(
+        db=db,
+        project_id=project_id,
+        run_id=run_id,
+        rack=rack,
+        vendor_id=vendor_id,
+    )
+

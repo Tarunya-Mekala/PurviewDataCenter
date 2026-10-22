@@ -184,6 +184,47 @@ def get_current_super_admin_flexible(
     return current_user
 
 
+def require_reviewer_or_admin_flexible(
+    current_user: User = Depends(get_current_user_flexible),
+) -> User:
+    """Dependency supporting both Bearer header and ?token= query parameter, restricted to reviewer, admin, and super_admin."""
+    allowed_roles = {"super_admin", "admin", "reviewer"}
+    if not (current_user.is_super_admin or current_user.role in allowed_roles):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Reviewer or Admin privileges required.",
+        )
+    return current_user
+
+
+def require_reviewer_or_admin(
+    current_user: User = Depends(get_current_active_user),
+) -> User:
+    """Dependency restricted to reviewer, admin, and super_admin (Bearer authorization)."""
+    allowed_roles = {"super_admin", "admin", "reviewer"}
+    if not (current_user.is_super_admin or current_user.role in allowed_roles):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Reviewer or Admin privileges required.",
+        )
+    return current_user
+
+
+def require_viewer_or_above(
+    current_user: User = Depends(get_current_active_user),
+) -> User:
+    """Dependency allowing viewer, engineer, reviewer, admin, and super_admin."""
+    allowed_roles = {"super_admin", "admin", "reviewer", "engineer", "viewer"}
+    if not (current_user.is_super_admin or current_user.role in allowed_roles):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Viewer privileges required.",
+        )
+    return current_user
+
+
+
+
 def create_evidence_token(document_id: str, expires_minutes: int = 15) -> str:
     """Generate a short-lived signed token for secure document evidence image access."""
     expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)

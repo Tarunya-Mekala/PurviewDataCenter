@@ -1,7 +1,7 @@
 """Schemas for BOM comparison, results, runs, and issue groups."""
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -56,6 +56,8 @@ class ComparisonResponse(BaseModel):
     vendor_id: Optional[str] = None
     summary: ComparisonSummary
     items: List[ComparisonItem]
+    created_by: Optional[str] = None
+    document_versions: Optional[List[Dict[str, Any]]] = None
 
 
 class ComparisonResultLine(BaseModel):
@@ -94,6 +96,7 @@ class ComparisonResultsListResponse(BaseModel):
     page: int
     page_size: int
     group_by: Optional[str] = None
+    run_id: Optional[str] = None
     items: List[ComparisonResultLine]
 
 
@@ -119,6 +122,7 @@ class IssueGroupResponse(BaseModel):
 
 class IssueGroupListResponse(BaseModel):
     total: int
+    run_id: Optional[str] = None
     items: List[IssueGroupResponse]
 
 
@@ -137,6 +141,9 @@ class ComparisonRunResponse(BaseModel):
     exceptions_count: int
     started_at: datetime
     finished_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    document_versions: Optional[List[Dict[str, Any]]] = None
+    is_frozen: Optional[bool] = True
 
 
 class ComparisonRunListResponse(BaseModel):
