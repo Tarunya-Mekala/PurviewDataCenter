@@ -1476,6 +1476,7 @@ class ExtractionService:
         db: Session,
         document_id: str,
         model: Optional[str] = None,
+        allow_fallback: bool = False,
     ) -> ExtractionJobResponse:
         """Run AI LLM extraction on a document."""
         from app.ai.llm import llm_client
@@ -1495,6 +1496,12 @@ class ExtractionService:
                 detail="Source file missing from disk storage.",
             )
         if not llm_client.is_available(target_model):
+            if allow_fallback:
+                return ExtractionService.extract_document(
+                    db=db,
+                    document_id=document_id,
+                    use_ai=False,
+                )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="AI engine is not available",
@@ -1732,6 +1739,15 @@ class ExtractionService:
                 doc.status = DocumentStatus.FAILED.value
                 doc.error_message = f"AI extraction error: {str(e)}"
             db.commit()
+            if allow_fallback:
+                try:
+                    return ExtractionService.extract_document(
+                        db=db,
+                        document_id=document_id,
+                        use_ai=False,
+                    )
+                except Exception:
+                    pass
             if not llm_client.is_available(target_model):
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
