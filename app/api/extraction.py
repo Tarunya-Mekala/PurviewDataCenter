@@ -2,8 +2,10 @@ from typing import List
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     Query,
+    Response,
     status,
 )
 
@@ -44,20 +46,29 @@ def get_ai_status(
     current_user: User = Depends(get_current_super_admin),
 ):
     from app.core.config import settings
+    from app.ai.llm import llm_client
 
-    provider = getattr(settings, "LLM_PROVIDER", "ollama")
-    model = getattr(settings, "LLM_MODEL", "qwen2.5:27b")
-    temperature = getattr(settings, "LLM_TEMPERATURE", 0.0)
+    available = llm_client.is_available()
 
     return {
-        "status": "online",
-        "provider": provider,
-        "configured_model": model,
-        "model": model,
-        "temperature": temperature,
-        "available": True,
-        "reachable": True,
-        "ollama_online": True,
+
+        "status": "online" if available else "offline",
+
+        "available": available,
+
+        "reachable": available,
+
+        "provider": (
+            settings.LLM_PROVIDER
+        ),
+
+        "configured_model": (
+            settings.LLM_MODEL
+        ),
+
+        "temperature": (
+            settings.LLM_TEMPERATURE
+        ),
     }
 
 
@@ -70,6 +81,10 @@ def get_ai_status(
 def extract_document(
 
     document_id: str,
+
+    background_tasks: BackgroundTasks,
+
+    response: Response,
 
     use_ai: bool = Query(
         False,
@@ -93,29 +108,26 @@ def extract_document(
     ),
 ):
 
-    if model:
-        return (
-            ExtractionService
-            .extract_document_with_ai(
-                db,
-                document_id,
-                model=model,
-                allow_fallback=True,
-            )
-        )
-    return (
-        ExtractionService
-        .extract_document(
+    if use_ai:
+        response.status_code = status.HTTP_202_ACCEPTED
+        return ExtractionService.queue_document_ai_extraction(
             db,
             document_id,
+            background_tasks,
+            model=model,
         )
+    return ExtractionService.extract_document(
+        db,
+        document_id,
+        use_ai=False,
+        model=model,
     )
 
 
 @router.post(
     "/documents/{document_id}/extract-ai",
     response_model=ExtractionJobResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=status.HTTP_202_ACCEPTED,
     summary=(
         "Extract category-specific "
         "structured records"
@@ -131,6 +143,8 @@ def extract_document_ai(
 
     document_id: str,
 
+    background_tasks: BackgroundTasks,
+
     db: Session = Depends(get_db),
 
     current_user: User = Depends(
@@ -140,9 +154,10 @@ def extract_document_ai(
 
     return (
         ExtractionService
-        .extract_document_with_ai(
+        .queue_document_ai_extraction(
             db,
             document_id,
+            background_tasks,
         )
     )
 
@@ -183,20 +198,13 @@ def get_document_extraction_status(
     summary="Extract all project documents",
 )
 def extract_all_documents(
-
     project_id: str,
-
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-
-    current_user: User = Depends(
-        get_current_super_admin
-    ),
+    current_user: User = Depends(get_current_super_admin),
 ):
-
-    return (
-        ExtractionService
-        .extract_all_project_documents(
-            db,
-            project_id,
-        )
+    return ExtractionService.queue_extract_all_project_documents(
+        db,
+        project_id,
+        background_tasks,
     )

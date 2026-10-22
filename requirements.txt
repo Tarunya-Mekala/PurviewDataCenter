@@ -40,7 +40,13 @@ opencv-python-headless
 langchain
 langchain-core
 langchain-community
-langchain-ollama
+
+# -------------------------
+# LLM
+# -------------------------
+google-genai
+openai
+httpx
 
 # -------------------------
 # Testing

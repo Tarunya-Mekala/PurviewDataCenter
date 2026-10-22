@@ -1,81 +1,168 @@
 import json
-from typing import Any, Dict, List, Optional
-
-import httpx
+import logging
+from typing import Any, Optional, Sequence
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
 
-class OllamaClient:
-    """Direct, robust client for Ollama LLM execution supporting format: 'json'."""
+import importlib
 
-    def __init__(self, base_url: Optional[str] = None, default_model: Optional[str] = None):
-        self.base_url = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
-        self.default_model = default_model or settings.LLM_MODEL
+try:
+    genai = importlib.import_module("google.genai")
+    types = importlib.import_module("google.genai.types")
+except Exception:
+    genai = None
 
-    def is_available(self) -> bool:
-        """Check if Ollama service is reachable."""
-        try:
-            with httpx.Client(timeout=2.0) as client:
-                res = client.get(f"{self.base_url}/api/tags")
-                return res.status_code == 200
-        except Exception:
+    class _InlineData:
+        def __init__(self, data: bytes, mime_type: str):
+            self.data = data
+            self.mime_type = mime_type
+
+    class _Part:
+        def __init__(self, data: bytes, mime_type: str):
+            self.inline_data = _InlineData(data=data, mime_type=mime_type)
+
+        @classmethod
+        def from_bytes(cls, data: bytes, mime_type: str):
+            return cls(data=data, mime_type=mime_type)
+
+    class _GenerateContentConfig:
+        def __init__(
+            self,
+            temperature: float = 0.0,
+            response_mime_type: Optional[str] = None,
+            response_schema: Optional[Any] = None,
+            system_instruction: Optional[str] = None,
+        ):
+            self.temperature = temperature
+            self.response_mime_type = response_mime_type
+            self.response_schema = response_schema
+            self.system_instruction = system_instruction
+
+    class _Types:
+        Part = _Part
+        GenerateContentConfig = _GenerateContentConfig
+
+    types = _Types()
+
+
+class LLMClient:
+    """
+    Provider-independent LLM client.
+
+    Currently:
+        Gemini 2.5 Flash-Lite
+
+    Later this same interface can be changed to:
+        Qwen3-VL
+        Ollama
+        vLLM
+        another OpenAI-compatible provider
+    """
+
+    def __init__(self):
+        self.client = (
+            genai.Client(api_key=settings.LLM_API_KEY)
+            if genai is not None
+            and settings.LLM_PROVIDER.lower() == "gemini"
+            and settings.LLM_API_KEY
+            else None
+        )
+        self.model = settings.LLM_MODEL
+
+    def is_available(self, model: Optional[str] = None) -> bool:
+        if self.client is None:
             return False
 
-    def list_models(self) -> List[str]:
-        """List currently downloaded models in Ollama."""
         try:
-            with httpx.Client(timeout=3.0) as client:
-                res = client.get(f"{self.base_url}/api/tags")
-                if res.status_code == 200:
-                    models = res.json().get("models", [])
-                    return [m.get("name") for m in models if m.get("name")]
-        except Exception:
-            pass
-        return []
+            self.client.models.get(model=model or self.model)
+        except Exception as exc:
+            logger.warning("LLM provider is unavailable: %s", exc)
+            return False
+        return True
+
+    def generate(
+        self,
+        prompt: str,
+        system_instruction: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> str:
+        if self.client is None:
+            raise RuntimeError("LLM provider is not configured.")
+
+        config = types.GenerateContentConfig(
+            temperature=settings.LLM_TEMPERATURE,
+        )
+
+        if system_instruction:
+            config.system_instruction = system_instruction
+
+        response = self.client.models.generate_content(
+            model=model or self.model,
+            contents=prompt,
+            config=config,
+        )
+
+        if not response.text:
+            raise RuntimeError("Gemini returned an empty response.")
+
+        return response.text
 
     def generate_json(
         self,
         prompt: str,
-        system: Optional[str] = None,
+        response_schema: Optional[dict[str, Any]] = None,
+        system_instruction: Optional[str] = None,
         model: Optional[str] = None,
-        timeout_seconds: float = 120.0,
-    ) -> Dict[str, Any]:
-        """
-        Invoke Ollama with strict JSON output formatting.
-        Returns the parsed JSON dictionary.
-        """
-        target_model = model or self.default_model
-        payload = {
-            "model": target_model,
-            "prompt": prompt,
-            "format": "json",
-            "stream": False,
-            "options": {
-                "temperature": 0.0,
-            },
-        }
-        if system:
-            payload["system"] = system
+        image_inputs: Optional[Sequence[tuple[bytes, str]]] = None,
+    ) -> dict[str, Any]:
+        if self.client is None:
+            raise RuntimeError("LLM provider is not configured.")
+
+        config = types.GenerateContentConfig(
+            temperature=settings.LLM_TEMPERATURE,
+            response_mime_type="application/json",
+        )
+
+        if response_schema:
+            config.response_schema = response_schema
+
+        if system_instruction:
+            config.system_instruction = system_instruction
+
+        contents: str | list[Any] = prompt
+        if image_inputs:
+            contents = [
+                prompt,
+                *[
+                    types.Part.from_bytes(
+                        data=image_data,
+                        mime_type=mime_type,
+                    )
+                    for image_data, mime_type in image_inputs
+                ],
+            ]
+
+        response = self.client.models.generate_content(
+            model=model or self.model,
+            contents=contents,
+            config=config,
+        )
+
+        if not response.text:
+            raise RuntimeError("Gemini returned an empty JSON response.")
 
         try:
-            with httpx.Client(timeout=timeout_seconds) as client:
-                res = client.post(f"{self.base_url}/api/generate", json=payload)
-                if res.status_code != 200:
-                    raise RuntimeError(f"Ollama returned HTTP {res.status_code}: {res.text}")
-                data = res.json()
-                raw_response = data.get("response", "{}")
-                return json.loads(raw_response)
-        except httpx.ConnectError:
-            raise ConnectionError(
-                f"Cannot connect to Ollama at '{self.base_url}'. Ensure Ollama is running and accessible."
-            )
-        except json.JSONDecodeError as jde:
-            raise ValueError(f"Failed to decode Ollama JSON response: {str(jde)}")
+            return json.loads(response.text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Gemini returned invalid JSON:\n{response.text}"
+            ) from exc
 
 
-ollama_client = OllamaClient()
-llm_client = ollama_client
+llm_client = LLMClient()
+ollama_client = llm_client
 
 
 def get_llm():

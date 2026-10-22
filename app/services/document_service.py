@@ -495,9 +495,9 @@ class DocumentService:
     ) -> Document:
         doc = DocumentService.get_document(db, document_id)
         if update_in.document_type is not None:
-            doc.document_type = update_in.document_type.value
+            doc.document_type = getattr(update_in.document_type, "value", update_in.document_type)
         if update_in.status is not None:
-            doc.status = update_in.status.value
+            doc.status = getattr(update_in.status, "value", update_in.status)
         if update_in.metadata_json is not None:
             existing = doc.metadata_json or {}
             existing.update(update_in.metadata_json)
