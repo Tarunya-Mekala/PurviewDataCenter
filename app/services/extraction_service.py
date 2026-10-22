@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 import random
 import re
 from decimal import Decimal, InvalidOperation
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import BackgroundTasks, HTTPException, status
+
+logger = logging.getLogger(__name__)
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -655,27 +658,30 @@ class ExtractionService:
 
             ocr_pages = []
             if pages_needing_ocr:
-                import fitz
-                import pytesseract
-                from PIL import Image
+                try:
+                    import fitz
+                    import pytesseract
+                    from PIL import Image
 
-                with fitz.open(file_path) as pdf:
-                    for page_number in pages_needing_ocr:
-                        page = pdf[page_number - 1]
-                        pixmap = page.get_pixmap(
-                            matrix=fitz.Matrix(2, 2),
-                            alpha=False,
-                        )
-                        image = Image.frombytes(
-                            "RGB",
-                            (pixmap.width, pixmap.height),
-                            pixmap.samples,
-                        )
-                        page_text = pytesseract.image_to_string(image).strip()
-                        if page_text:
-                            ocr_pages.append(
-                                f"===== PAGE {page_number} OCR =====\n{page_text}"
+                    with fitz.open(file_path) as pdf:
+                        for page_number in pages_needing_ocr:
+                            page = pdf[page_number - 1]
+                            pixmap = page.get_pixmap(
+                                matrix=fitz.Matrix(2, 2),
+                                alpha=False,
                             )
+                            image = Image.frombytes(
+                                "RGB",
+                                (pixmap.width, pixmap.height),
+                                pixmap.samples,
+                            )
+                            page_text = pytesseract.image_to_string(image).strip()
+                            if page_text:
+                                ocr_pages.append(
+                                    f"===== PAGE {page_number} OCR =====\n{page_text}"
+                                )
+                except Exception as ocr_err:
+                    logger.warning("OCR processing skipped for %s: %s", file_path, ocr_err)
 
             embedded_text = (
                 pdf_to_llm_text(parsed)
@@ -876,63 +882,73 @@ class ExtractionService:
             ocr_page_sizes: Dict[int, Tuple[int, int]] = {}
             pages_needing_ocr = [
                 page["page_number"]
-                for page in parsed["pages"]
+                for page in parsed.get("pages", [])
+                if not page.get("text", "").strip()
+                and not any(
+                    cell.get("value", "").strip()
+                    for table in page.get("tables", [])
+                    for row in table.get("rows", [])
+                    for cell in row.get("cells", [])
+                )
             ]
             ocr_words_by_page: Dict[int, List[Dict[str, Any]]] = {}
             if pages_needing_ocr:
-                import fitz
-                import pytesseract
-                from PIL import Image
-                from pytesseract import Output
+                try:
+                    import fitz
+                    import pytesseract
+                    from PIL import Image
+                    from pytesseract import Output
 
-                with fitz.open(file_path) as pdf:
-                    for page_number in pages_needing_ocr:
-                        page = pdf[page_number - 1]
-                        pixmap = page.get_pixmap(
-                            matrix=fitz.Matrix(2, 2),
-                            alpha=False,
-                        )
-                        ocr_page_sizes[page_number] = (
-                            pixmap.width,
-                            pixmap.height,
-                        )
-                        image = Image.frombytes(
-                            "RGB",
-                            (pixmap.width, pixmap.height),
-                            pixmap.samples,
-                        )
-                        data = pytesseract.image_to_data(
-                            image,
-                            output_type=Output.DICT,
-                        )
-                        words = []
-                        for index, raw_text in enumerate(data["text"]):
-                            word = str(raw_text).strip()
-                            if not word:
-                                continue
-                            try:
-                                confidence = float(data["conf"][index])
-                            except (TypeError, ValueError):
-                                confidence = 0.0
-                            words.append({
-                                "text": word,
-                                "left": int(data["left"][index]),
-                                "top": int(data["top"][index]),
-                                "width": int(data["width"][index]),
-                                "height": int(data["height"][index]),
-                                "line": (
-                                    data["block_num"][index],
-                                    data["par_num"][index],
-                                    data["line_num"][index],
-                                ),
-                                "confidence": confidence,
-                            })
-                        ocr_words_by_page[page_number] = words
-                        ocr_text = pytesseract.image_to_string(image).strip()
-                        if ocr_text:
-                            ocr_pages.append(
-                                f"===== PAGE {page_number} OCR =====\n{ocr_text}"
+                    with fitz.open(file_path) as pdf:
+                        for page_number in pages_needing_ocr:
+                            page = pdf[page_number - 1]
+                            pixmap = page.get_pixmap(
+                                matrix=fitz.Matrix(2, 2),
+                                alpha=False,
                             )
+                            ocr_page_sizes[page_number] = (
+                                pixmap.width,
+                                pixmap.height,
+                            )
+                            image = Image.frombytes(
+                                "RGB",
+                                (pixmap.width, pixmap.height),
+                                pixmap.samples,
+                            )
+                            data = pytesseract.image_to_data(
+                                image,
+                                output_type=Output.DICT,
+                            )
+                            words = []
+                            for index, raw_text in enumerate(data.get("text", [])):
+                                word = str(raw_text).strip()
+                                if not word:
+                                    continue
+                                try:
+                                    confidence = float(data["conf"][index])
+                                except (TypeError, ValueError):
+                                    confidence = 0.0
+                                words.append({
+                                    "text": word,
+                                    "left": int(data["left"][index]),
+                                    "top": int(data["top"][index]),
+                                    "width": int(data["width"][index]),
+                                    "height": int(data["height"][index]),
+                                    "line": (
+                                        data["block_num"][index],
+                                        data["par_num"][index],
+                                        data["line_num"][index],
+                                    ),
+                                    "confidence": confidence,
+                                })
+                            ocr_words_by_page[page_number] = words
+                            ocr_text = pytesseract.image_to_string(image).strip()
+                            if ocr_text:
+                                ocr_pages.append(
+                                    f"===== PAGE {page_number} OCR =====\n{ocr_text}"
+                                )
+                except Exception as ocr_err:
+                    logger.warning("OCR processing skipped for %s: %s", file_path, ocr_err)
 
             for page in parsed["pages"]:
                 page_number = page["page_number"]
@@ -1137,17 +1153,21 @@ class ExtractionService:
                 return [(output.getvalue(), "image/png")]
 
         if ext == ".pdf":
-            import fitz
+            try:
+                import fitz
 
-            images = []
-            with fitz.open(file_path) as pdf:
-                for page in pdf:
-                    pixmap = page.get_pixmap(
-                        matrix=fitz.Matrix(1.5, 1.5),
-                        alpha=False,
-                    )
-                    images.append((pixmap.tobytes("png"), "image/png"))
-            return images
+                images = []
+                with fitz.open(file_path) as pdf:
+                    for page in pdf:
+                        pixmap = page.get_pixmap(
+                            matrix=fitz.Matrix(1.5, 1.5),
+                            alpha=False,
+                        )
+                        images.append((pixmap.tobytes("png"), "image/png"))
+                return images
+            except Exception as img_err:
+                logger.warning("Failed to render PDF images for %s: %s", file_path, img_err)
+                return []
 
         return []
 
@@ -1450,81 +1470,6 @@ class ExtractionService:
                 detail=f"Extraction failed: {str(e)}",
             )
 
-    @staticmethod
-    def queue_document_ai_extraction(
-        db: Session,
-        document_id: str,
-        background_tasks: BackgroundTasks,
-        model: Optional[str] = None,
-    ) -> ExtractionJobResponse:
-        from app.ai.llm import llm_client
-
-        target_model = model or settings.LLM_MODEL
-        doc = db.execute(
-            select(Document).where(Document.id == document_id)
-        ).scalar_one_or_none()
-        if not doc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Document '{document_id}' not found.",
-            )
-        if not Path(doc.file_path).exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Source file missing from disk storage.",
-            )
-        if not llm_client.is_available(target_model):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="AI engine is not available",
-            )
-
-        doc.status = DocumentStatus.EXTRACTING.value
-        doc.error_message = None
-        db.commit()
-        background_tasks.add_task(
-            ExtractionService.run_background_ai_extraction,
-            document_id,
-            target_model,
-        )
-        return ExtractionJobResponse(
-            document_id=doc.id,
-            document_name=doc.filename,
-            status="queued",
-            records_extracted=0,
-            message="Document AI extraction queued for background processing.",
-            model_used=target_model,
-            fallback=False,
-        )
-
-    @staticmethod
-    def run_background_ai_extraction(
-        document_id: str,
-        model: Optional[str] = None,
-    ) -> None:
-        from app.core.database import SessionLocal
-
-        with SessionLocal() as db:
-            try:
-                ExtractionService.extract_document_with_ai(
-                    db,
-                    document_id,
-                    model=model,
-                )
-            except HTTPException as exc:
-                db.rollback()
-                doc = db.get(Document, document_id)
-                if doc:
-                    doc.status = DocumentStatus.FAILED.value
-                    doc.error_message = str(exc.detail)
-                    db.commit()
-            except Exception as exc:
-                db.rollback()
-                doc = db.get(Document, document_id)
-                if doc:
-                    doc.status = DocumentStatus.FAILED.value
-                    doc.error_message = f"AI extraction failed: {exc}"
-                    db.commit()
 
     @staticmethod
     def extract_document_with_ai(

@@ -244,11 +244,14 @@ def parse_image_file(
         file_path
     )
 
-    ocr_data = pytesseract.image_to_data(
-        pil_image,
-        output_type=Output.DICT,
-        config="--psm 6",
-    )
+    try:
+        ocr_data = pytesseract.image_to_data(
+            pil_image,
+            output_type=Output.DICT,
+            config="--psm 6",
+        )
+    except Exception:
+        ocr_data = {"text": []}
 
     words: list[dict[str, Any]] = []
 
@@ -342,10 +345,13 @@ def parse_image_file(
         image
     )
 
-    full_text = pytesseract.image_to_string(
-        pil_image,
-        config="--psm 6",
-    ).strip()
+    try:
+        full_text = pytesseract.image_to_string(
+            pil_image,
+            config="--psm 6",
+        ).strip()
+    except Exception:
+        full_text = ""
 
     return {
         "file_name": file_path.name,
