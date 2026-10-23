@@ -70,6 +70,7 @@ def get_ai_status(
         "temperature": (
             settings.LLM_TEMPERATURE
         ),
+         "api_base_url": settings.LLM_BASE_URL,
     }
 
 
