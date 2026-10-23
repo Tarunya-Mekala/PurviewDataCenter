@@ -553,9 +553,9 @@ class ExtractionService:
         try:
             import importlib
             try:
-                fitz = importlib.import_module("fitz")
-            except ImportError:
                 fitz = importlib.import_module("pymupdf")
+            except ImportError:
+                fitz = importlib.import_module("fitz")
 
             doc = fitz.open(file_path)
             for page_idx, page in enumerate(doc, start=1):
@@ -659,7 +659,10 @@ class ExtractionService:
             ocr_pages = []
             if pages_needing_ocr:
                 try:
-                    import fitz
+                    try:
+                        import pymupdf as fitz
+                    except ImportError:
+                        import fitz
                     import pytesseract
                     from PIL import Image
 
@@ -894,7 +897,10 @@ class ExtractionService:
             ocr_words_by_page: Dict[int, List[Dict[str, Any]]] = {}
             if pages_needing_ocr:
                 try:
-                    import fitz
+                    try:
+                        import pymupdf as fitz
+                    except ImportError:
+                        import fitz
                     import pytesseract
                     from PIL import Image
                     from pytesseract import Output
@@ -1154,7 +1160,10 @@ class ExtractionService:
 
         if ext == ".pdf":
             try:
-                import fitz
+                try:
+                    import pymupdf as fitz
+                except ImportError:
+                    import fitz
 
                 images = []
                 with fitz.open(file_path) as pdf:

@@ -312,7 +312,10 @@ def test_ai_prompt_and_schema_cover_semantic_equipment_fields():
 
 
 def test_ai_image_inputs_preserve_image_and_pdf_visual_sources(tmp_path):
-    fitz = pytest.importorskip("fitz")
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        fitz = pytest.importorskip("fitz")
 
     from app.services.extraction_service import ExtractionService
 
