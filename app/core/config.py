@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     REPORT_DIR: str = str(BASE_DIR / "data" / "reports")
     BACKUP_DIR: str = str(BASE_DIR / "data" / "backups")
 
+    # Database connection pool settings
+    DB_POOL_SIZE: int = 25
+    DB_MAX_OVERFLOW: int = 50
+    DB_POOL_TIMEOUT: int = 60
+    DB_POOL_RECYCLE: int = 1800
+
     # Retention period (in days) for stored export files (7 years = 2555 days for audit & dispute compliance)
     EXPORT_RETENTION_DAYS: int = 2555
 

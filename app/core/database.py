@@ -22,11 +22,21 @@ def _init_engine():
     if is_sqlite:
         connect_args = {"check_same_thread": False}
 
+    pool_kwargs = {}
+    if not is_sqlite:
+        pool_kwargs = {
+            "pool_size": settings.DB_POOL_SIZE,
+            "max_overflow": settings.DB_MAX_OVERFLOW,
+            "pool_timeout": settings.DB_POOL_TIMEOUT,
+            "pool_recycle": settings.DB_POOL_RECYCLE,
+        }
+
     try:
         eng = create_engine(
             target_url,
             connect_args=connect_args,
             pool_pre_ping=not is_sqlite,
+            **pool_kwargs,
         )
         # Test connection
         with eng.connect():
