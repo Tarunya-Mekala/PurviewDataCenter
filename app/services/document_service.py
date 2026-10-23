@@ -2,15 +2,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from collections import defaultdict
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.comparison_run import ComparisonRun
 from app.models.document import Document
 from app.models.extracted_record import ExtractedRecord
 from app.models.project import Project
 from app.models.record_review_action import RecordReviewAction
+from app.models.vendor import Vendor
 from app.schemas.document import (
     DocumentResponse,
     DocumentStatus,
@@ -22,6 +25,7 @@ from app.schemas.document import (
 from app.schemas.project import (
     ProjectCreate,
     ProjectDocumentCounts,
+    ProjectLatestRunCounts,
     ProjectRecordCounts,
     ProjectResponse,
     ProjectUpdate,
@@ -30,6 +34,7 @@ from app.schemas.record import ReviewStatus
 from app.utils.file_utils import (
     delete_file_safely,
     detect_document_type,
+    detect_document_type_from_content,
     get_file_extension,
     get_mime_type_for_file,
     sanitize_filename,
@@ -124,6 +129,162 @@ class DocumentService:
         return project
 
     @staticmethod
+    def _build_project_responses(
+        db: Session, projects: List[Project]
+    ) -> List[ProjectResponse]:
+        if not projects:
+            return []
+
+        project_ids = [p.id for p in projects]
+
+        # 1. Bulk load document counts grouped by project and status
+        doc_counts_by_project = defaultdict(dict)
+        doc_rows = db.execute(
+            select(Document.project_id, Document.status, func.count(Document.id))
+            .where(Document.project_id.in_(project_ids))
+            .group_by(Document.project_id, Document.status)
+        ).all()
+        for pid, st, cnt in doc_rows:
+            doc_counts_by_project[pid][st] = cnt
+
+        # 2. Bulk load record counts (total and pending review) in a single query
+        record_counts_by_project = {}
+        rec_rows = db.execute(
+            select(
+                ExtractedRecord.project_id,
+                func.count(ExtractedRecord.id),
+                func.sum(
+                    case(
+                        (ExtractedRecord.review_status == ReviewStatus.PENDING_REVIEW.value, 1),
+                        else_=0,
+                    )
+                ),
+            )
+            .where(
+                ExtractedRecord.project_id.in_(project_ids),
+                ExtractedRecord.is_deleted == False,
+            )
+            .group_by(ExtractedRecord.project_id)
+        ).all()
+        for pid, total_cnt, pending_cnt in rec_rows:
+            record_counts_by_project[pid] = {
+                "total": total_cnt or 0,
+                "pending_review": pending_cnt or 0,
+            }
+
+        # 3. Bulk load vendor names for each project
+        vendors_by_project = defaultdict(list)
+        vendor_rows = db.execute(
+            select(Vendor.project_id, Vendor.name)
+            .where(Vendor.project_id.in_(project_ids))
+            .order_by(Vendor.name.asc())
+        ).all()
+        for pid, vname in vendor_rows:
+            if vname and vname not in vendors_by_project[pid]:
+                vendors_by_project[pid].append(vname)
+
+        # 4. Bulk load latest comparison run and counts for each project
+        latest_runs_by_project = {}
+        rn_subq = (
+            select(
+                ComparisonRun.id.label("run_id"),
+                ComparisonRun.project_id,
+                ComparisonRun.run_number,
+                ComparisonRun.status,
+                ComparisonRun.total_expected,
+                ComparisonRun.total_found,
+                ComparisonRun.matches_count,
+                ComparisonRun.discrepancies_count,
+                ComparisonRun.exceptions_count,
+                ComparisonRun.started_at,
+                ComparisonRun.finished_at,
+                func.row_number()
+                .over(
+                    partition_by=ComparisonRun.project_id,
+                    order_by=(ComparisonRun.run_number.desc(), ComparisonRun.started_at.desc()),
+                )
+                .label("rn"),
+            )
+            .where(ComparisonRun.project_id.in_(project_ids))
+            .subquery()
+        )
+        run_rows = db.execute(select(rn_subq).where(rn_subq.c.rn == 1)).all()
+        for row in run_rows:
+            expected = float(row.total_expected or 0.0)
+            matches = int(row.matches_count or 0)
+            discrepancies = int(row.discrepancies_count or 0)
+            exceptions = int(row.exceptions_count or 0)
+            total_items = matches + discrepancies + exceptions
+
+            if expected > 0:
+                rate = round((matches / expected) * 100, 2)
+            elif total_items > 0:
+                rate = round((matches / total_items) * 100, 2)
+            else:
+                rate = 100.0 if row.status == "completed" else 0.0
+
+            latest_runs_by_project[row.project_id] = ProjectLatestRunCounts(
+                run_id=row.run_id,
+                run_number=row.run_number,
+                status=row.status or "completed",
+                total_expected=expected,
+                total_found=float(row.total_found or 0.0),
+                matches_count=matches,
+                discrepancies_count=discrepancies,
+                exceptions_count=exceptions,
+                match_rate_percentage=rate,
+                started_at=row.started_at,
+                finished_at=row.finished_at,
+            )
+
+        # Build responses
+        results = []
+        for p in projects:
+            p_doc_counts_dict = doc_counts_by_project.get(p.id, {})
+            doc_counts = ProjectDocumentCounts(
+                pending=p_doc_counts_dict.get("pending", 0),
+                parsing=p_doc_counts_dict.get("parsing", 0),
+                parsed=p_doc_counts_dict.get("parsed", 0),
+                extracting=p_doc_counts_dict.get("extracting", 0),
+                extracted=p_doc_counts_dict.get("extracted", 0),
+                failed=p_doc_counts_dict.get("failed", 0),
+            )
+            p_rec_counts_dict = record_counts_by_project.get(p.id, {})
+            rec_counts = ProjectRecordCounts(
+                total=p_rec_counts_dict.get("total", 0),
+                pending_review=p_rec_counts_dict.get("pending_review", 0),
+            )
+            v_list = vendors_by_project.get(p.id, [])
+            l_run = latest_runs_by_project.get(p.id)
+
+            results.append(
+                ProjectResponse(
+                    id=p.id,
+                    name=p.name,
+                    description=p.description,
+                    status=p.status or "active",
+                    owner_id=p.owner_id,
+                    created_by=p.created_by,
+                    created_at=p.created_at,
+                    updated_at=p.updated_at,
+                    document_count=sum(p_doc_counts_dict.values()),
+                    document_counts=doc_counts,
+                    record_counts=rec_counts,
+                    vendor_names=v_list,
+                    vendors=v_list,
+                    latest_run=l_run,
+                    latest_run_counts=l_run,
+                )
+            )
+        return results
+
+    @staticmethod
+    def get_project_response(db: Session, project_id: str) -> ProjectResponse:
+        project = DocumentService.get_project(db, project_id)
+        responses = DocumentService._build_project_responses(db, [project])
+        return responses[0]
+
+    @staticmethod
     def list_projects(
         db: Session, skip: int = 0, limit: int = 100
     ) -> Tuple[int, List[ProjectResponse]]:
@@ -138,56 +299,7 @@ class DocumentService:
             .scalars()
             .all()
         )
-
-        results = []
-        for p in projects:
-            # Query document status counts
-            doc_rows = db.execute(
-                select(Document.status, func.count(Document.id))
-                .where(Document.project_id == p.id)
-                .group_by(Document.status)
-            ).all()
-            doc_counts_dict = {row[0]: row[1] for row in doc_rows}
-            doc_counts = ProjectDocumentCounts(
-                pending=doc_counts_dict.get("pending", 0),
-                parsing=doc_counts_dict.get("parsing", 0),
-                parsed=doc_counts_dict.get("parsed", 0),
-                extracting=doc_counts_dict.get("extracting", 0),
-                extracted=doc_counts_dict.get("extracted", 0),
-                failed=doc_counts_dict.get("failed", 0),
-            )
-
-            # Query record counts
-            total_recs = db.execute(
-                select(func.count(ExtractedRecord.id))
-                .where(ExtractedRecord.project_id == p.id, ExtractedRecord.is_deleted == False)
-            ).scalar() or 0
-            pending_recs = db.execute(
-                select(func.count(ExtractedRecord.id))
-                .where(
-                    ExtractedRecord.project_id == p.id,
-                    ExtractedRecord.is_deleted == False,
-                    ExtractedRecord.review_status == ReviewStatus.PENDING_REVIEW.value,
-                )
-            ).scalar() or 0
-            record_counts = ProjectRecordCounts(total=total_recs, pending_review=pending_recs)
-
-            doc_count = sum(doc_counts_dict.values())
-            results.append(
-                ProjectResponse(
-                    id=p.id,
-                    name=p.name,
-                    description=p.description,
-                    status=p.status or "active",
-                    owner_id=p.owner_id,
-                    created_by=p.created_by,
-                    created_at=p.created_at,
-                    updated_at=p.updated_at,
-                    document_count=doc_count,
-                    document_counts=doc_counts,
-                    record_counts=record_counts,
-                )
-            )
+        results = DocumentService._build_project_responses(db, projects)
         return total, results
 
     @staticmethod
@@ -239,6 +351,14 @@ class DocumentService:
         if source_clean not in ["plan", "vendor"]:
             source_clean = "plan"
 
+        # Refuse delivery on plan source
+        doc_type_val = getattr(document_type, "value", document_type)
+        if doc_type_val == "delivery" and source_clean == "plan":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Document type 'delivery' is for vendor side only; cannot be uploaded as plan source.",
+            )
+
         if source_clean == "vendor":
             if not vendor_id:
                 raise HTTPException(
@@ -273,24 +393,31 @@ class DocumentService:
                 ext = validate_file_extension(orig_filename)
                 clean_name = sanitize_filename(orig_filename)
 
-                # 2. Determine document type
-                resolved_type = (
-                    document_type.value
-                    if document_type and document_type != DocumentType.OTHER
-                    else detect_document_type(clean_name).value
-                )
-
-                # 3. Create unique file path
+                # 2. Create unique file path
                 doc_id = generate_id("doc")
                 stored_filename = f"{doc_id}_{clean_name}"
                 dest_path = project_upload_dir / stored_filename
 
-                # 4. Save file & compute SHA-256
+                # 3. Save file & compute SHA-256
                 file_size, sha256 = await save_upload_file(
                     upload_file=file,
                     dest_path=dest_path,
                     max_size_mb=50,
                 )
+
+                # 4. Determine document type (explicit or auto-detect from content/filename)
+                if document_type and document_type != DocumentType.OTHER:
+                    resolved_type = getattr(document_type, "value", document_type)
+                else:
+                    resolved_type = detect_document_type_from_content(dest_path, clean_name).value
+
+                # Delivery documents are vendor-side only
+                if resolved_type == "delivery" and source_clean == "plan":
+                    delete_file_safely(dest_path)
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Document type 'delivery' is for vendor side only; cannot be uploaded as plan source.",
+                    )
 
                 # 5. Create database record
                 doc = Document(
@@ -320,6 +447,8 @@ class DocumentService:
                 successful.append(DocumentResponse.model_validate(doc))
 
             except HTTPException as he:
+                if he.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY and "delivery" in str(he.detail).lower():
+                    raise he
                 failed.append(
                     DocumentUploadFailure(
                         filename=orig_filename,
@@ -494,8 +623,28 @@ class DocumentService:
         db: Session, document_id: str, update_in: DocumentUpdate
     ) -> Document:
         doc = DocumentService.get_document(db, document_id)
+        target_type = (
+            getattr(update_in.document_type, "value", update_in.document_type)
+            if update_in.document_type is not None
+            else doc.document_type
+        )
+        target_source = (
+            update_in.source.lower().strip()
+            if update_in.source is not None
+            else doc.source
+        )
+        if target_type == "delivery" and target_source == "plan":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Document type 'delivery' is for vendor side only; cannot be associated with plan source.",
+            )
+
         if update_in.document_type is not None:
-            doc.document_type = getattr(update_in.document_type, "value", update_in.document_type)
+            doc.document_type = target_type
+        if update_in.source is not None:
+            doc.source = target_source
+        if update_in.vendor_id is not None:
+            doc.vendor_id = update_in.vendor_id
         if update_in.status is not None:
             doc.status = getattr(update_in.status, "value", update_in.status)
         if update_in.metadata_json is not None:

@@ -75,6 +75,14 @@ COLUMN_SYNONYMS: Dict[str, List[str]] = {
     "condition_notes": [
         "notes", "condition notes", "remarks", "comments", "test notes"
     ],
+    "hostname": [
+        "hostname", "host name", "device hostname", "node name", "device name", "system name", "server name", "host"
+    ],
+    "delivery_date": [
+        "delivery date", "delivery_date", "received", "received date",
+        "date received", "delivered date", "ship date", "arrival date",
+        "delivery dt", "rcvd date"
+    ],
 }
 
 
@@ -170,9 +178,14 @@ def map_headers(headers: List[str]) -> Tuple[Dict[str, str], Dict[str, float]]:
 def is_doa_or_test_column(header: str) -> bool:
     """Check if header relates to DOA or component functional testing."""
     h = normalize_header(header)
-    return any(k in h for k in ["doa", "test", "functional", "status", "psu", "fans", "chassis", "leds"]) and not any(
-        k in h for k in ["part", "serial", "quantity", "description"]
-    )
+    # Exclude PSU identification / serial columns like 'psu1', 'psu2', 'psu pid vid', 'psu serial', etc.
+    if re.search(r"\bpsu\s*\d+\b", h) or re.search(r"\bpsu\b.*(pid|vid|serial|sn|s/n)", h):
+        return False
+    if any(k in h for k in ["doa", "test", "functional", "qc", "inspection"]):
+        return not any(k in h for k in ["part", "serial", "quantity", "description"])
+    if any(k in h for k in ["fans", "chassis", "leds"]) and not any(k in h for k in ["part", "serial", "quantity", "description"]):
+        return True
+    return False
 
 
 def detect_condition(raw_row: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
@@ -196,12 +209,16 @@ def detect_condition(raw_row: Dict[str, Any]) -> Tuple[Optional[str], Optional[s
         if any(term in h_norm for term in ["notes", "remarks", "comments", "condition notes"]):
             if v_str:
                 condition_notes.append(v_str)
+                # Check for explicit failure notes like "incorrect fans", "failed", "defective"
+                v_lower = v_str.lower()
+                if any(w in v_lower for w in ["fail", "failed", "defect", "damage", "broken", "incorrect", "bad", "burn", "short"]):
+                    has_failure = True
 
         # Check for test/DOA columns
         if is_doa_or_test_column(k):
             test_columns_found += 1
             lower_val = v_str.lower()
-            # If boolean False, or text 'fail', 'failed', 'f', 'bad', 'broken', 'false'
+            # If boolean False, or text 'fail', 'failed', 'f', 'bad', 'broken', 'false', '0', 'no'
             if lower_val in ["false", "fail", "failed", "f", "0", "no", "bad", "broken"]:
                 has_failure = True
                 condition_notes.append(f"{k}: {v_str}")

@@ -66,25 +66,25 @@ class Project(Base):
         "Document",
         back_populates="project",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )
     extracted_records: Mapped[List["ExtractedRecord"]] = relationship(
         "ExtractedRecord",
         back_populates="project",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )
     vendors: Mapped[List["Vendor"]] = relationship(
         "Vendor",
         back_populates="project",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )
     comparison_runs: Mapped[List["ComparisonRun"]] = relationship(
         "ComparisonRun",
         back_populates="project",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
         order_by="ComparisonRun.run_number.desc()",
     )
 

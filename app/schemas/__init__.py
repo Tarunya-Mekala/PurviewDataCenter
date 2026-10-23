@@ -9,6 +9,7 @@ from app.schemas.document import (
 )
 from app.schemas.project import (
     ProjectCreate,
+    ProjectLatestRunCounts,
     ProjectListResponse,
     ProjectResponse,
     ProjectUpdate,

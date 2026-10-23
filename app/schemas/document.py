@@ -13,6 +13,7 @@ class DocumentType(str, Enum):
     RACK_LAYOUT = "rack_layout"
     POWER = "power"
     CABLE = "cable"
+    DELIVERY = "delivery"
     OTHER = "other"
 
 

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -19,6 +19,11 @@ def get_utc_now():
 
 class ExtractedRecord(Base):
     __tablename__ = "extracted_records"
+    __table_args__ = (
+        Index("idx_extracted_records_proj_status_del", "project_id", "review_status", "is_deleted"),
+        Index("idx_extracted_records_proj_del", "project_id", "is_deleted"),
+        Index("idx_extracted_records_doc_del", "document_id", "is_deleted"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(64),
@@ -266,3 +271,46 @@ class ExtractedRecord(Base):
         lazy="selectin",
         order_by="RecordReviewAction.created_at.asc()",
     )
+
+    @property
+    def hostname(self) -> Optional[str]:
+        if self.raw_data and isinstance(self.raw_data, dict):
+            return self.raw_data.get("hostname")
+        return None
+
+    @hostname.setter
+    def hostname(self, value: Optional[str]) -> None:
+        if self.raw_data is None:
+            self.raw_data = {}
+        if isinstance(self.raw_data, dict):
+            self.raw_data["hostname"] = value
+
+    @property
+    def delivery_date(self) -> Optional[str]:
+        if self.raw_data and isinstance(self.raw_data, dict):
+            val = self.raw_data.get("delivery_date")
+            return str(val) if val is not None else None
+        return None
+
+    @delivery_date.setter
+    def delivery_date(self, value: Optional[str]) -> None:
+        if self.raw_data is None:
+            self.raw_data = {}
+        if isinstance(self.raw_data, dict):
+            self.raw_data["delivery_date"] = value
+
+    @property
+    def psu_serials(self) -> Optional[str]:
+        if self.raw_data and isinstance(self.raw_data, dict):
+            val = self.raw_data.get("psu_serials")
+            if isinstance(val, list):
+                return ", ".join(str(x) for x in val)
+            return str(val) if val is not None else None
+        return None
+
+    @psu_serials.setter
+    def psu_serials(self, value: Optional[str]) -> None:
+        if self.raw_data is None:
+            self.raw_data = {}
+        if isinstance(self.raw_data, dict):
+            self.raw_data["psu_serials"] = value

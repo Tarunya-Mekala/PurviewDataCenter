@@ -46,6 +46,9 @@ class ExtractedRecordBase(BaseModel):
     target_device: Optional[str] = Field(None, description="Target device / rack for cabling connections")
     target_port: Optional[str] = Field(None, description="Target port for cabling connections")
     cable_type: Optional[str] = Field(None, description="Cable media type (e.g. Cat6, Fiber, DAC)")
+    hostname: Optional[str] = Field(None, description="Device hostname")
+    delivery_date: Optional[str] = Field(None, description="Delivery or receipt date")
+    psu_serials: Optional[str] = Field(None, description="PSU serial numbers")
     field_sources: Optional[Dict[str, Any]] = Field(None, description="Precise cell or area coordinate evidence per field")
 
 
@@ -79,6 +82,9 @@ class ExtractedRecordUpdate(BaseModel):
     target_device: Optional[str] = None
     target_port: Optional[str] = None
     cable_type: Optional[str] = None
+    hostname: Optional[str] = None
+    delivery_date: Optional[str] = None
+    psu_serials: Optional[str] = None
     field_sources: Optional[Dict[str, Any]] = None
     review_notes: Optional[str] = None
     review_reason: Optional[str] = None

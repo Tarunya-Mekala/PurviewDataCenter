@@ -36,7 +36,7 @@ router = APIRouter(tags=["Documents"], dependencies=[Depends(get_current_super_a
     response_model=DocumentUploadResult,
     status_code=status.HTTP_201_CREATED,
     summary="Upload documents to a project",
-    description="Upload one or multiple documents (BOM, Purchase/P2P, Rack Layout, Power, Cable, etc.) to a project. Maximum file size: 50 MB per file. Accepted types: .xlsx, .xls, .xlsm, .csv, .tsv, .pdf, .docx, .png, .jpg, .jpeg, .tiff.",
+    description="Upload one or multiple documents (BOM, Purchase/P2P, Rack Layout, Power, Cable, Delivery, etc.) to a project. Maximum file size: 50 MB per file. Accepted types: .xlsx, .xls, .xlsm, .csv, .tsv, .pdf, .docx, .png, .jpg, .jpeg, .tiff.",
 )
 async def upload_documents(
     project_id: str,
@@ -152,7 +152,7 @@ async def replace_document(
 )
 def list_documents(
     project_id: str,
-    document_type: Optional[str] = Query(None, description="Filter by document type (bom, purchase, rack_layout, etc.)"),
+    document_type: Optional[str] = Query(None, description="Filter by document type (bom, purchase, rack_layout, delivery, etc.)"),
     status: Optional[str] = Query(None, description="Filter by processing status"),
     skip: int = Query(0, ge=0, description="Offset for pagination"),
     limit: int = Query(100, ge=1, le=500, description="Limit for pagination"),

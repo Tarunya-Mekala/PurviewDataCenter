@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -19,6 +19,10 @@ def get_utc_now():
 
 class Document(Base):
     __tablename__ = "documents"
+    __table_args__ = (
+        Index("idx_documents_proj_status", "project_id", "status"),
+        Index("idx_documents_proj_source", "project_id", "source"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(64),
@@ -122,5 +126,5 @@ class Document(Base):
         "ExtractedRecord",
         back_populates="document",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )

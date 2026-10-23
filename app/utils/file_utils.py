@@ -80,6 +80,10 @@ def detect_document_type(filename: str) -> DocumentType:
     Auto-detect document type from filename keywords.
     """
     lower = filename.lower()
+    if any(k in lower for k in ["doa", "received", "packing list", "packing_list", "delivery note", "delivery_note", "delivery", "asset register", "asset_register"]):
+        return DocumentType.DELIVERY
+    if "hostname" in lower and any(k in lower for k in ["serial", "location", "device"]):
+        return DocumentType.DELIVERY
     if any(k in lower for k in ["bom", "bill_of_materials", "bill-of-materials", "materials"]):
         return DocumentType.BOM
     if any(k in lower for k in ["p2p", "point_to_point", "point-to-point", "port_to_port", "interconnect"]):
@@ -91,6 +95,78 @@ def detect_document_type(filename: str) -> DocumentType:
     if any(k in lower for k in ["cable", "cabling", "patch", "wiring", "fiber"]):
         return DocumentType.CABLE
     return DocumentType.OTHER
+
+
+def detect_document_type_from_content(file_path: Union[Path, str], filename: Optional[str] = None) -> DocumentType:
+    """
+    Auto-detect document type inspecting filename, sheet names, and column headers.
+    Special detection for 'delivery':
+    - Sheet or column names containing: 'DoA', 'Received', 'Packing list', or 'Delivery note'
+    - Or columns with Serial No. + Rack + RU
+    """
+    path = Path(file_path)
+    fn = filename or path.name
+    type_from_name = detect_document_type(fn)
+    if type_from_name == DocumentType.DELIVERY:
+        return DocumentType.DELIVERY
+
+    ext = path.suffix.lower()
+
+    def check_headers_for_delivery(headers_list) -> bool:
+        norm_headers = [re.sub(r"[_\s\-]+", " ", str(h).strip().lower()) for h in headers_list if h is not None]
+        # 1. 'DoA', 'Received', 'Packing list', 'Delivery note'
+        delivery_keywords = ["doa", "received", "packing list", "delivery note"]
+        for h in norm_headers:
+            if any(k in h for k in delivery_keywords):
+                return True
+
+        # 2. Serial No. + Rack + RU columns
+        has_serial = any(any(s in h for s in ["serial", "serial no", "serial number", "s/n", "sn", "serial #"]) for h in norm_headers)
+        has_rack = any(any(r in h for r in ["rack", "rack id", "cabinet", "cabinet id"]) for h in norm_headers)
+        has_ru = any(re.search(r"\b(u|ru|u position|rack unit|slot)\b", h) for h in norm_headers)
+        if has_serial and has_rack and has_ru:
+            return True
+        return False
+
+    try:
+        if ext in [".xlsx", ".xls", ".xlsm"]:
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            # Check sheet names
+            delivery_keywords = ["doa", "received", "packing list", "delivery note", "delivery", "asset register"]
+            for sname in wb.sheetnames:
+                s_lower = sname.lower()
+                if any(k in s_lower for k in delivery_keywords):
+                    wb.close()
+                    return DocumentType.DELIVERY
+
+            # Check header rows across sheets
+            for sname in wb.sheetnames:
+                sheet = wb[sname]
+                for row in sheet.iter_rows(max_row=10, values_only=True):
+                    non_empty = [c for c in row if c is not None and str(c).strip()]
+                    if len(non_empty) >= 2:
+                        if check_headers_for_delivery(non_empty):
+                            wb.close()
+                            return DocumentType.DELIVERY
+            wb.close()
+        elif ext in [".csv", ".tsv"]:
+            import csv
+            sep = "\t" if ext == ".tsv" else ","
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                reader = csv.reader(f, delimiter=sep)
+                for _ in range(10):
+                    row = next(reader, None)
+                    if row is None:
+                        break
+                    non_empty = [c for c in row if c.strip()]
+                    if len(non_empty) >= 2:
+                        if check_headers_for_delivery(non_empty):
+                            return DocumentType.DELIVERY
+    except Exception:
+        pass
+
+    return type_from_name
 
 
 def get_mime_type_for_file(file_path: Union[Path, str]) -> str:

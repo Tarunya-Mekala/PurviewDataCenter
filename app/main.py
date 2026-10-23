@@ -40,6 +40,14 @@ async def lifespan(app: FastAPI):
             conn.execute(text("ALTER TABLE comparison_runs ADD COLUMN IF NOT EXISTS created_by VARCHAR(255)"))
             conn.execute(text("ALTER TABLE comparison_runs ADD COLUMN IF NOT EXISTS document_versions JSON"))
             conn.execute(text("ALTER TABLE comparison_runs ADD COLUMN IF NOT EXISTS is_frozen BOOLEAN DEFAULT TRUE"))
+            # Performance indexes on project_id, document_id, review_status
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_extracted_records_proj_status_del ON extracted_records (project_id, review_status, is_deleted)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_extracted_records_proj_del ON extracted_records (project_id, is_deleted)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_extracted_records_doc_del ON extracted_records (document_id, is_deleted)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_documents_proj_status ON documents (project_id, status)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_documents_proj_source ON documents (project_id, source)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_comparison_runs_proj_run ON comparison_runs (project_id, run_number)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_vendors_proj_name ON vendors (project_id, name)"))
             conn.commit()
     except Exception:
         pass

@@ -148,12 +148,12 @@ class ComparisonService:
             else:
                 if not plan_map[key].get("vendor") and r.vendor:
                     plan_map[key]["vendor"] = r.vendor
-                if not plan_map[key].get("manufacturer") and r.manufacturer:
-                    plan_map[key]["manufacturer"] = r.manufacturer
-                if not plan_map[key].get("category") and r.category:
-                    plan_map[key]["category"] = r.category
-                if not plan_map[key].get("raw_data") and r.raw_data:
-                    plan_map[key]["raw_data"] = r.raw_data
+            if not plan_map[key].get("model") and r.model:
+                plan_map[key]["model"] = r.model
+            if not plan_map[key].get("u_position") and r.u_position:
+                plan_map[key]["u_position"] = r.u_position
+            if r.serial_number:
+                plan_map[key].setdefault("serials", []).append(r.serial_number)
             plan_map[key]["quantity"] += qty
 
         # 4. Aggregate Vendor records by canonical (part_key, rack_key)
@@ -186,8 +186,15 @@ class ComparisonService:
                     "quantity": 0.0,
                     "conditions": [],
                     "condition_notes": [],
+                    "serials": [],
                 }
             vendor_map[key]["quantity"] += qty
+            if r.serial_number:
+                vendor_map[key].setdefault("serials", []).append(r.serial_number)
+            if not vendor_map[key].get("model") and r.model:
+                vendor_map[key]["model"] = r.model
+            if not vendor_map[key].get("u_position") and r.u_position:
+                vendor_map[key]["u_position"] = r.u_position
             if r.condition:
                 vendor_map[key]["conditions"].append(r.condition)
             if r.condition_notes:
@@ -424,11 +431,27 @@ class ComparisonService:
                 fnd_num = found_qty
                 exp_text = f"U{p_data['u_position']}"
                 fnd_text = f"U{v_data['u_position']}"
+            elif p_data and v_data and p_data.get("serials") and v_data.get("serials") and set(p_data["serials"]) != set(v_data["serials"]):
+                status_code = ComparisonStatus.DISCREPANCY
+                discrepancies_count += 1
+                cause = "Serial number different"
+                details = f"Serial number mismatch: planned '{', '.join(p_data['serials'])}', found '{', '.join(v_data['serials'])}'."
+                action = "Verify physical device serial number with vendor."
+                rule_id = "RULE_SERIAL_MISMATCH"
+                exp_num = expected_qty
+                fnd_num = found_qty
+                exp_text = ", ".join(p_data["serials"])
+                fnd_text = ", ".join(v_data["serials"])
             else:
                 status_code = ComparisonStatus.MATCH
                 matches_count += 1
                 cause = "Exact match"
                 details = "Delivered hardware matches engineering plan exactly with healthy condition."
+                if v_data and v_data.get("serials"):
+                    serials_sample = ", ".join(v_data["serials"][:3])
+                    if len(v_data["serials"]) > 3:
+                        serials_sample += f" (+{len(v_data['serials']) - 3} more)"
+                    details += f" Serial present: {serials_sample}."
                 action = "Accept / Verified for data center rack installation."
                 rule_id = "RULE_MATCH"
                 exp_num = expected_qty

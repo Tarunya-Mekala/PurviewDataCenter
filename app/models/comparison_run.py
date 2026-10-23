@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import Any, Optional, TYPE_CHECKING
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.utils.id_generator import generate_id
@@ -15,6 +15,9 @@ def get_utc_now():
 
 class ComparisonRun(Base):
     __tablename__ = "comparison_runs"
+    __table_args__ = (
+        Index("idx_comparison_runs_proj_run", "project_id", "run_number"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(64),

@@ -23,4 +23,4 @@ RUN mkdir -p data/uploads data/extracted data/processed data/reports
 EXPOSE 8000
 
 # Start FastAPI application with automatic migration
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-4}"]

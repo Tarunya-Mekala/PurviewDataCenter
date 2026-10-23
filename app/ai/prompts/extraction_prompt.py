@@ -132,6 +132,27 @@ CATEGORY_EXTRACTION_GUIDANCE = {
             "quantity",
         ],
     },
+
+    "delivery": {
+        "purpose": (
+            "Delivery notes, packing lists, serial number lists (asset register), "
+            "DoA test results, and cable test results showing what actually arrived and was installed."
+        ),
+        "fields": [
+            "serial_number",
+            "psu_serials",
+            "hostname",
+            "part_number",
+            "model",
+            "rack",
+            "u_position",
+            "delivery_date",
+            "condition",
+            "condition_notes",
+            "quantity",
+            "description",
+        ],
+    },
 }
 
 

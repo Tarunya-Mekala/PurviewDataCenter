@@ -33,17 +33,7 @@ def create_project(
     current_user: User = Depends(require_reviewer_or_admin),
 ):
     project = DocumentService.create_project(db, project_in)
-    return ProjectResponse(
-        id=project.id,
-        name=project.name,
-        description=project.description,
-        status=project.status,
-        owner_id=project.owner_id,
-        created_by=project.created_by,
-        created_at=project.created_at,
-        updated_at=project.updated_at,
-        document_count=0,
-    )
+    return DocumentService.get_project_response(db, project.id)
 
 
 @router.get(
@@ -73,18 +63,7 @@ def get_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_viewer_or_above),
 ):
-    project = DocumentService.get_project(db, project_id)
-    return ProjectResponse(
-        id=project.id,
-        name=project.name,
-        description=project.description,
-        status=project.status,
-        owner_id=project.owner_id,
-        created_by=project.created_by,
-        created_at=project.created_at,
-        updated_at=project.updated_at,
-        document_count=len(project.documents),
-    )
+    return DocumentService.get_project_response(db, project_id)
 
 
 @router.patch(
@@ -100,17 +79,7 @@ def update_project(
     current_user: User = Depends(require_reviewer_or_admin),
 ):
     project = DocumentService.update_project(db, project_id, project_in)
-    return ProjectResponse(
-        id=project.id,
-        name=project.name,
-        description=project.description,
-        status=project.status,
-        owner_id=project.owner_id,
-        created_by=project.created_by,
-        created_at=project.created_at,
-        updated_at=project.updated_at,
-        document_count=len(project.documents) if project.documents else 0,
-    )
+    return DocumentService.get_project_response(db, project.id)
 
 
 @router.delete(

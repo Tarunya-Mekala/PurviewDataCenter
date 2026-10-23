@@ -154,6 +154,32 @@ class ExtractionService:
                 if val_str:
                     record_data["unmapped_columns"].append(col_label)
 
+        # Collect PSU serials from columns (e.g. PSU1, PSU2, PSU Serials)
+        psu_serials_list = []
+        for col_name, val in record_data["raw_data"].items():
+            if val is None or not str(val).strip():
+                continue
+            h_clean = normalize_header(col_name)
+            if (re.search(r"\bpsu\s*\d+\b", h_clean) or re.search(r"\bpsu\b.*(serial|sn|s/n)", h_clean)) and not re.search(r"\b(pid|vid|doa|test)\b", h_clean):
+                psu_serials_list.append(str(val).strip())
+        if psu_serials_list:
+            record_data["raw_data"]["psu_serials"] = psu_serials_list
+            record_data["psu_serials"] = ", ".join(psu_serials_list)
+
+        # Delivery date
+        if record_data.get("delivery_date"):
+            record_data["raw_data"]["delivery_date"] = record_data["delivery_date"]
+
+        # Hostname handling
+        hostname = record_data.get("hostname")
+        if hostname:
+            record_data["raw_data"]["hostname"] = hostname
+            if not record_data.get("model") and not record_data.get("part_number"):
+                record_data["model"] = hostname
+                record_data["part_number"] = hostname
+            if not record_data.get("description"):
+                record_data["description"] = hostname
+
         # 2. Extract and clean part number
         part_number = record_data.get("part_number")
 
@@ -255,6 +281,9 @@ class ExtractionService:
             "cleaned_part_number": record_data.get("cleaned_part_number"),
             "model": record_data.get("model"),
             "serial_number": record_data.get("serial_number"),
+            "hostname": record_data.get("hostname"),
+            "delivery_date": record_data.get("delivery_date"),
+            "psu_serials": record_data.get("psu_serials"),
             "condition": record_data.get("condition"),
             "condition_notes": record_data.get("condition_notes"),
             "description": record_data.get("description"),
@@ -298,11 +327,17 @@ class ExtractionService:
             col_mapping, col_confidence = map_headers(headers)
             has_part_num = "part_number" in col_mapping.values()
             has_desc_qty = "description" in col_mapping.values() and "quantity" in col_mapping.values()
+            has_serial = "serial_number" in col_mapping.values()
+            has_delivery_cols = (
+                has_serial
+                or ("hostname" in col_mapping.values())
+                or ("rack" in col_mapping.values() and "u_position" in col_mapping.values())
+            )
 
-            if not has_part_num and not has_desc_qty:
+            if not has_part_num and not has_desc_qty and not has_delivery_cols:
                 skipped_sheets.append({
                     "name": "default",
-                    "reason": "No part number or (description + quantity) column found",
+                    "reason": "No part number, (description + quantity), or serial/delivery columns found",
                 })
                 return [], skipped_sheets
 
@@ -477,12 +512,18 @@ class ExtractionService:
                 col_mapping, col_confidence = map_headers(headers)
                 has_part_num = "part_number" in col_mapping.values()
                 has_desc_qty = "description" in col_mapping.values() and "quantity" in col_mapping.values()
+                has_serial = "serial_number" in col_mapping.values()
+                has_delivery_cols = (
+                    has_serial
+                    or ("hostname" in col_mapping.values())
+                    or ("rack" in col_mapping.values() and "u_position" in col_mapping.values())
+                )
 
-                # Problem 11: Require part-number column or (description + quantity), else skip sheet
-                if not has_part_num and not has_desc_qty:
+                # Require part-number column, (description + quantity), or delivery/serial columns, else skip sheet
+                if not has_part_num and not has_desc_qty and not has_delivery_cols:
                     skipped_sheets.append({
                         "name": sheet_name,
-                        "reason": "No part number or (description + quantity) column found",
+                        "reason": "No part number, (description + quantity), or serial/delivery columns found",
                     })
                     continue
 
@@ -512,11 +553,17 @@ class ExtractionService:
                     col_mapping, col_confidence = map_headers(headers)
                     has_part_num = "part_number" in col_mapping.values()
                     has_desc_qty = "description" in col_mapping.values() and "quantity" in col_mapping.values()
+                    has_serial = "serial_number" in col_mapping.values()
+                    has_delivery_cols = (
+                        has_serial
+                        or ("hostname" in col_mapping.values())
+                        or ("rack" in col_mapping.values() and "u_position" in col_mapping.values())
+                    )
 
-                    if not has_part_num and not has_desc_qty:
+                    if not has_part_num and not has_desc_qty and not has_delivery_cols:
                         skipped_sheets.append({
                             "name": sheet_name,
-                            "reason": "No part number or (description + quantity) column found",
+                            "reason": "No part number, (description + quantity), or serial/delivery columns found",
                         })
                         continue
 
@@ -1270,6 +1317,7 @@ class ExtractionService:
                 "rack_layout": RecordType.RACK_ITEM.value,
                 "power": RecordType.POWER_ITEM.value,
                 "cable": RecordType.CABLE_ITEM.value,
+                "delivery": RecordType.BOM_ITEM.value,
             }
             default_record_type = doc_type_mapping.get(doc.document_type, RecordType.BOM_ITEM.value)
 
